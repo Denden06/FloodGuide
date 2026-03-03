@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FloodGuide – Real-Time Flood Risk Map</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+
+        h2 {
+            margin: 10px;
+        }
+
+        #map {
+            height: calc(100% - 60px);
+            width: 100%;
+        }
+
+        /* LEGEND STYLE */
+        #legend {
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            background: white;
+            padding: 12px;
+            border: 2px solid #666;
+            border-radius: 6px;
+            font-size: 14px;
+            z-index: 9999;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        }
+
+        .legend-item {
+            margin-bottom: 6px;
+        }
+
+        .legend-color {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+
+<body>
+
+<h2>FloodGuide – Real-Time Flood Risk Map</h2>
+<div id="map"></div>
+
+<!-- LEGEND -->
+<div id="legend">
+    <b>Flood Risk Levels</b><br><br>
+    <div class="legend-item">
+        <span class="legend-color" style="background:green;"></span> Low Risk
+    </div>
+    <div class="legend-item">
+        <span class="legend-color" style="background:orange;"></span> Moderate Risk
+    </div>
+    <div class="legend-item">
+        <span class="legend-color" style="background:red;"></span> High Risk
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="{{ url_for('static', filename='js/map.js') }}"></script>
+
+</body>
+</html>

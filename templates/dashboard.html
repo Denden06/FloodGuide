@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flood Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+<h2>Live Flood Probability</h2>
+<canvas id="chart"></canvas>
+
+<script>
+const ctx = document.getElementById('chart');
+const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [{
+            label: 'Flood Probability',
+            data: [],
+            borderColor: 'red'
+        }]
+    }
+});
+
+function updateChart() {
+    fetch('/api/live-data')
+    .then(res => res.json())
+    .then(data => {
+
+        chart.data.labels.push(data.Timestamp);
+        chart.data.datasets[0].data.push(data.FloodProbability);
+
+        if (chart.data.labels.length > 20) {
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
+        }
+
+        chart.update();
+    });
+}
+
+setInterval(updateChart, 5000);
+</script>
+
+</body>
+</html>
