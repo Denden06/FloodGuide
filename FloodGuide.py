@@ -3,50 +3,83 @@ import requests
 import joblib
 import pandas as pd
 from datetime import datetime
+import mysql.connector
+import os
 
 app = Flask(__name__)
+
+# =========================================
+# DATABASE CONNECTION (Railway / Render)
+# =========================================
+def get_db_connection():
+    return mysql.connector.connect(
+        host=os.getenv("mysql.railway.internal", "localhost"),
+        user=os.getenv("DB_USER", "root"),
+        password=os.getenv("cYHockIgVucbKAkgNvkRjTqsTGngkjvD", ""),
+        database=os.getenv("DB_NAME", "railway"),
+        port=int(os.getenv("DB_PORT", 3306))
+    )
 
 # =========================================
 # CONFIG
 # =========================================
 API_KEY = "e2a8ee9c6e8ec237763497022a1309bb"
 
-# Load ML model
 clf = joblib.load("model_class.pkl")
 
-# Store latest ESP32 sensor values
 latest_sensor_data = {
     "water_level": 0.0,
     "rainfall": 0.0
 }
 
-# Monitored bridge locations
 MONITORED_SITES = [
     {"id": "bridge1", "name": "Mandaue-Mactan Bridge 1", "lat": 10.326490, "lng": 123.952142},
     {"id": "bridge2", "name": "Marcelo Fernan Bridge", "lat": 10.334968, "lng": 123.960462}
 ]
 
 # =========================================
-# ESP32 SENSOR ENDPOINT (MATCHES YOUR JSON)
+# ESP32 SENSOR ENDPOINT
 # =========================================
 @app.route("/api/sensor-data", methods=["POST"])
 def receive_sensor():
-    data = request.get_json()
 
+    data = request.get_json()
     print("Received from ESP32:", data)
 
     if not data:
         return jsonify({"error": "No JSON received"}), 400
 
-    # MATCH your ESP32 keys exactly
-    latest_sensor_data["water_level"] = float(data.get("waterLevel", 0))
-    latest_sensor_data["rainfall"] = float(data.get("totalRain", 0))
+    water_level = float(data.get("waterLevel", 0))
+    rainfall = float(data.get("totalRain", 0))
+
+    latest_sensor_data["water_level"] = water_level
+    latest_sensor_data["rainfall"] = rainfall
+
+    # 🔥 SAVE TO DATABASE
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        query = """
+        INSERT INTO sensor_readings (total_rain, water_level, flow_rate)
+        VALUES (%s, %s, %s)
+        """
+        cursor.execute(query, (rainfall, water_level, 0))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print("Data saved to database")
+
+    except Exception as e:
+        print("Database Insert Error:", e)
 
     return jsonify({"status": "received"})
 
 
 # =========================================
-# MACHINE LEARNING WITH CONFIDENCE
+# MACHINE LEARNING
 # =========================================
 def ml_predict(rain, temp, humidity):
 
@@ -83,18 +116,11 @@ def map_data():
             url = f"https://api.openweathermap.org/data/2.5/weather?lat={loc['lat']}&lon={loc['lng']}&appid={API_KEY}&units=metric"
             r = requests.get(url, timeout=5).json()
 
-            if "main" not in r:
-                print("Weather API Error:", r)
-                rainfall = 0
-                temp = 28
-                humidity = 70
-            else:
-                rainfall = r.get("rain", {}).get("1h", 0)
-                temp = r["main"]["temp"]
-                humidity = r["main"]["humidity"]
+            rainfall = r.get("rain", {}).get("1h", 0)
+            temp = r["main"]["temp"]
+            humidity = r["main"]["humidity"]
 
-        except Exception as e:
-            print("Weather Request Failed:", e)
+        except:
             rainfall = 0
             temp = 28
             humidity = 70
@@ -136,7 +162,7 @@ def home():
 
 
 # =========================================
-# RUN SERVER
+# RUN LOCAL (Render uses gunicorn)
 # =========================================
 if __name__ == "__main__":
     print("FloodGuide Running...")
