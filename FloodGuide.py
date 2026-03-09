@@ -5,8 +5,6 @@ import pandas as pd
 from datetime import datetime
 import mysql.connector
 import os
-import threading
-import time
 
 app = Flask(__name__)
 
@@ -27,36 +25,18 @@ def get_db_connection():
 # =========================================
 API_KEY = "e2a8ee9c6e8ec237763497022a1309bb"
 
+clf = joblib.load("model_class.pkl")
+
 latest_sensor_data = {
     "water_level": 0.0,
     "rainfall": 0.0,
-    "flow_rate": 0.0
+    "flow_rate": 0.0  # still used internally for model if needed
 }
 
 MONITORED_SITES = [
     {"id": "bridge1", "name": "Mandaue-Mactan Bridge 1", "lat": 10.326490, "lng": 123.952142},
     {"id": "bridge2", "name": "Marcelo Fernan Bridge", "lat": 10.334968, "lng": 123.960462}
 ]
-
-# =========================================
-# ML MODELS
-# =========================================
-clf = None
-reg = None
-model_lock = threading.Lock()
-
-def load_models():
-    global clf, reg
-    try:
-        with model_lock:
-            clf = joblib.load("model_class.pkl")
-            reg = joblib.load("model_subside.pkl")
-            print(f"[{datetime.now()}] Models loaded successfully")
-    except Exception as e:
-        print("❌ Error loading models:", e)
-
-# Load models at start
-load_models()
 
 # =========================================
 # ESP32 SENSOR ENDPOINT
@@ -80,44 +60,50 @@ def receive_sensor():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        query = "INSERT INTO sensor_readings (total_rain, water_level, flow_rate) VALUES (%s, %s, %s)"
+
+        query = """
+        INSERT INTO sensor_readings (total_rain, water_level, flow_rate)
+        VALUES (%s, %s, %s)
+        """
+
         cursor.execute(query, (rainfall, water_level, flow_rate))
         conn.commit()
+
         cursor.close()
         conn.close()
         print("✅ Data saved to database")
+
     except Exception as e:
         print("❌ Database Insert Error:", e)
 
     return jsonify({"status": "received"})
 
+
 # =========================================
-# ML PREDICTION
+# MACHINE LEARNING
 # =========================================
-def ml_predict_from_sensor(sensor_data, clf_model):
-    try:
-        df = pd.DataFrame([{
-            "total_rain": sensor_data["rainfall"],
-            "water_level": sensor_data["water_level"],
-            "flow_rate": sensor_data["flow_rate"],
-            "rain_3h": 0,
-            "rain_6h": 0,
-            "rise_rate": 0,
-            "month": datetime.now().month
-        }])
-        with model_lock:
-            pred = clf_model.predict(df)[0]
-            prob = clf_model.predict_proba(df)[0]
-        confidence = round(max(prob) * 100, 2)
-        if pred == 0:
-            return "Low", "green", confidence
-        elif pred == 1:
-            return "Moderate", "orange", confidence
-        else:
-            return "High", "red", confidence
-    except Exception as e:
-        print("❌ Prediction Error:", e)
-        return "Unknown", "gray", 0
+def ml_predict_from_sensor(sensor_data, clf):
+    df = pd.DataFrame([{
+        "total_rain": sensor_data["rainfall"],
+        "water_level": sensor_data["water_level"],
+        "flow_rate": sensor_data["flow_rate"],
+        "rain_3h": 0,    # default 0 for live sensor
+        "rain_6h": 0,
+        "rise_rate": 0,
+        "month": datetime.now().month
+    }])
+
+    pred = clf.predict(df)[0]
+    probabilities = clf.predict_proba(df)[0]
+    confidence = round(max(probabilities) * 100, 2)
+
+    if pred == 0:
+        return "Low", "green", confidence
+    elif pred == 1:
+        return "Moderate", "orange", confidence
+    else:
+        return "High", "red", confidence
+
 
 # =========================================
 # MAP DATA ENDPOINT
@@ -131,6 +117,7 @@ def map_data():
         try:
             url = f"https://api.openweathermap.org/data/2.5/weather?lat={loc['lat']}&lon={loc['lng']}&appid={API_KEY}&units=metric"
             r = requests.get(url, timeout=5).json()
+
             rainfall = r.get("rain", {}).get("1h", 0)
             temp = r["main"]["temp"]
             humidity = r["main"]["humidity"]
@@ -149,12 +136,13 @@ def map_data():
             🌊 <b>Flood Risk:</b> <span style="color:{color}; font-weight:bold;">{risk}</span><br>
             🎯 <b>Confidence:</b> {confidence}%<br><br>
             🌧 Rainfall: {rainfall:.2f} mm<br>
-            📏 Water Level: {water_level_cm:.2f} cm<br>
             🌡 Temperature: {temp:.1f} °C<br>
-            💧 Humidity: {humidity}%<br><br>
+            💧 Humidity: {humidity}%<br>
+            📏 Water Level: {water_level_cm:.2f} cm<br>
             🕒 Updated: {timestamp}
         </div>
         """
+
         data_list.append({
             "id": loc["id"],
             "lat": loc["lat"],
@@ -165,24 +153,6 @@ def map_data():
 
     return jsonify({"locations": data_list})
 
-# =========================================
-# RETRAIN ENDPOINT
-# =========================================
-@app.route("/api/retrain", methods=["POST"])
-def retrain():
-    try:
-        from retrain_model import load_sensor_data, prepare_features, train_models
-        df = load_sensor_data()
-        X, y_class, y_reg = prepare_features(df)
-        if X is not None:
-            train_models(X, y_class, y_reg)
-            load_models()  # reload models after retrain
-            return jsonify({"status": "retrained"})
-        else:
-            return jsonify({"status": "no data"}), 400
-    except Exception as e:
-        print("❌ Retrain Error:", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 # =========================================
 # MAIN PAGE
@@ -191,9 +161,7 @@ def retrain():
 def home():
     return render_template("map.html")
 
-# =========================================
-# RUN APP
-# =========================================
+
 if __name__ == "__main__":
     print("FloodGuide Running...")
     app.run(host="0.0.0.0", port=5000, debug=True)

@@ -1,10 +1,8 @@
 import pandas as pd
-import numpy as np
 import joblib
 import mysql.connector
 import os
 from datetime import datetime
-
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, mean_absolute_error, r2_score
@@ -22,7 +20,7 @@ def get_db_connection():
     )
 
 # ===============================
-# LOAD DATA FROM MYSQL
+# LOAD SENSOR DATA
 # ===============================
 def load_sensor_data():
     try:
@@ -47,8 +45,8 @@ def prepare_features(df):
     df = df.sort_values('timestamp')
 
     # Rolling rainfall
-    df['rain_3h'] = df['total_rain'].rolling(window=3).sum()
-    df['rain_6h'] = df['total_rain'].rolling(window=6).sum()
+    df['rain_3h'] = df['total_rain'].rolling(3).sum().fillna(0)
+    df['rain_6h'] = df['total_rain'].rolling(6).sum().fillna(0)
 
     # Water level rise rate
     df['rise_rate'] = df['water_level'].diff().fillna(0)
@@ -63,7 +61,7 @@ def prepare_features(df):
 
     X = df[features]
 
-    # Assuming you have these columns in the table (or set defaults)
+    # Add default targets if they don’t exist
     if 'flooded' not in df.columns:
         df['flooded'] = 0
     if 'subside_time' not in df.columns:
@@ -97,7 +95,7 @@ def train_models(X, y_class, y_reg):
     # Save models
     joblib.dump(clf, "model_class.pkl")
     joblib.dump(reg, "model_subside.pkl")
-    print("\n✅ Models retrained and saved successfully!")
+    print(f"[{datetime.now()}] ✅ Models retrained and saved successfully!")
 
 # ===============================
 # MAIN
