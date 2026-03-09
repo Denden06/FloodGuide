@@ -179,15 +179,3 @@ def home():
 if __name__ == "__main__":
     print("FloodGuide Running...")
     app.run(host="0.0.0.0", port=5000, debug=True)
-@app.route("/api/retrain", methods=["POST"])
-def retrain():
-    from train_model import load_sensor_data, prepare_features, train_models
-
-    df = load_sensor_data()
-    X, y_class, y_reg = prepare_features(df)
-
-    if X is not None:
-        train_models(X, y_class, y_reg)
-        return {"status": "retrained"}
-    else:
-        return {"status": "no data"}, 400
