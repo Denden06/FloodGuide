@@ -171,20 +171,19 @@ def map_data():
 @app.route("/api/retrain", methods=["POST"])
 def retrain():
     try:
-        from train_model import load_sensor_data, prepare_features, train_models
-
+        from retrain_model import load_sensor_data, prepare_features, train_models
         df = load_sensor_data()
         X, y_class, y_reg = prepare_features(df)
-
         if X is not None:
             train_models(X, y_class, y_reg)
+            load_models()  # reload models after retrain
             return jsonify({"status": "retrained"})
         else:
             return jsonify({"status": "no data"}), 400
-
     except Exception as e:
         print("❌ Retrain Error:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
+
 # =========================================
 # MAIN PAGE
 # =========================================
