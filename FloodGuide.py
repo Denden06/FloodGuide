@@ -284,6 +284,56 @@ def map_data():
 # =========================================
 # MAIN PAGE
 # =========================================
+# =========================================
+# AUTO-RETRAIN ENDPOINT
+# =========================================
+@app.route("/retrain", methods=["GET", "POST"])
+def retrain():
+    try:
+        print("🔄 Auto-retrain triggered...")
+        conn = get_db_connection()
+        df   = pd.read_sql("SELECT * FROM sensor_readings ORDER BY timestamp ASC", conn)
+        conn.close()
+
+        if len(df) < 10:
+            return jsonify({"status": "skipped", "reason": f"Only {len(df)} rows — need at least 10"}), 200
+
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values("timestamp").reset_index(drop=True)
+        df["rain_3h"]   = df["total_rain"].rolling(window=3, min_periods=1).sum()
+        df["rain_6h"]   = df["total_rain"].rolling(window=6, min_periods=1).sum()
+        df["rise_rate"] = df["water_level"].diff().fillna(0)
+        df["month"]     = df["timestamp"].dt.month
+        df = df.fillna(0)
+
+        if df["flooded"].nunique() < 2:
+            df["flooded"] = df.apply(
+                lambda r: 2 if (r.water_level > 150 or r.total_rain > 30)
+                         else (1 if (r.water_level > 80 or r.total_rain > 15 or r.flow_rate > 3)
+                         else 0), axis=1
+            )
+
+        if df["flooded"].nunique() < 2:
+            return jsonify({"status": "skipped", "reason": "Still only 1 class"}), 200
+
+        from sklearn.ensemble import RandomForestClassifier
+        features = ["total_rain", "water_level", "flow_rate",
+                    "rain_3h", "rain_6h", "rise_rate", "month"]
+        X = df[features]
+        y = df["flooded"].astype(int)
+
+        clf = RandomForestClassifier(n_estimators=300, max_depth=10,
+                                     class_weight="balanced", random_state=42)
+        clf.fit(X, y)
+        joblib.dump(clf, MODEL_PATH)
+
+        msg = f"✅ Retrained on {len(df)} rows"
+        print(msg)
+        return jsonify({"status": "success", "message": msg, "rows": len(df)}), 200
+
+    except Exception as e:
+        print(f"❌ Retrain error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 @app.route("/")
 def home():
     return render_template("map.html")
