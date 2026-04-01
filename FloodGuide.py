@@ -15,11 +15,11 @@ app = Flask(__name__)
 # =========================================
 def get_db_connection():
     return mysql.connector.connect(
-        host=os.getenv("MYSQLHOST", "caboose.proxy.rlwy.net"),
-        user=os.getenv("MYSQLUSER", "root"),
-        password=os.getenv("MYSQLPASSWORD", "cYHockIgVucbKAkgNvkRjTqsTGngkjvD"),
-        database=os.getenv("MYSQLDATABASE", "railway"),
-        port=int(os.getenv("MYSQLPORT", 52603)),
+        host=os.getenv("MYSQLHOST", "b7hubkhd0btnnd1gtw6f-mysql.services.clever-cloud.com"),
+        user=os.getenv("MYSQLUSER", "ufmtd04ysstwmoml"),
+        password=os.getenv("MYSQLPASSWORD", "X0kiVkBuBLacKOxNtUkI"),
+        database=os.getenv("MYSQLDATABASE", "b7hubkhd0btnnd1gtw6f"),
+        port=int(os.getenv("MYSQLPORT", 3306)),
         connection_timeout=10
     )
 
