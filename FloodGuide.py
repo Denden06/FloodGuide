@@ -11,7 +11,7 @@ import time
 app = Flask(__name__)
 
 # =========================================
-# DATABASE CONNECTION (Railway / Render)
+# DATABASE CONNECTION (Clever Cloud)
 # =========================================
 def get_db_connection():
     return mysql.connector.connect(
@@ -20,20 +20,20 @@ def get_db_connection():
         password=os.getenv("MYSQLPASSWORD", "X0kiVkBuBLacKOxNtUkI"),
         database=os.getenv("MYSQLDATABASE", "b7hubkhd0btnnd1gtw6f"),
         port=int(os.getenv("MYSQLPORT", 3306)),
-        connection_timeout=10
+        connection_timeout=10,
+        ssl_disabled=False
     )
 
 # =========================================
 # CONFIG
 # =========================================
-API_KEY = "e2a8ee9c6e8ec237763497022a1309bb"
+API_KEY    = "e2a8ee9c6e8ec237763497022a1309bb"
 MODEL_PATH = "model_class.pkl"
 
-# In-memory latest reading (updated on each ESP32 POST)
 latest_sensor_data = {
     "water_level": 0.0,
-    "rainfall": 0.0,
-    "flow_rate": 0.0
+    "rainfall":    0.0,
+    "flow_rate":   0.0
 }
 
 MONITORED_SITES = [
@@ -42,17 +42,13 @@ MONITORED_SITES = [
 ]
 
 # =========================================
-# RENDER KEEP-ALIVE (prevents spin-down)
-# Render free tier sleeps after 15 min idle.
-# UptimeRobot pings /ping every 5 min, but
-# this thread also self-pings as a backup.
+# RENDER KEEP-ALIVE
 # =========================================
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 
 def keep_alive():
-    """Ping our own /ping endpoint every 10 minutes so Render doesn't spin down."""
     while True:
-        time.sleep(600)  # 10 minutes
+        time.sleep(600)
         if RENDER_URL:
             try:
                 requests.get(f"{RENDER_URL}/ping", timeout=10)
@@ -62,19 +58,17 @@ def keep_alive():
 
 @app.route("/ping")
 def ping():
-    """UptimeRobot + self keep-alive endpoint."""
     return jsonify({"status": "alive", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
 # =========================================
-# LOAD MODEL FUNCTION
+# LOAD MODEL
 # =========================================
 def load_model():
     if os.path.exists(MODEL_PATH):
         try:
             clf = joblib.load(MODEL_PATH)
-            # Guard: model must know at least 2 classes to be useful
             if hasattr(clf, 'classes_') and len(clf.classes_) < 2:
-                print("⚠️ Model only has 1 class — falling back to rule-based prediction.")
+                print("⚠️ Model only has 1 class — using rule-based fallback.")
                 return None
             return clf
         except Exception as e:
@@ -85,13 +79,11 @@ def load_model():
         return None
 
 # =========================================
-# FETCH LAST N READINGS FROM DB
-# Used to compute real rain_3h, rain_6h, rise_rate
+# FETCH RECENT READINGS FOR ROLLING FEATURES
 # =========================================
 def get_recent_readings(n=6):
-    """Return last n sensor readings as a list of dicts, oldest first."""
     try:
-        conn = get_db_connection()
+        conn   = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
             "SELECT total_rain, water_level, flow_rate FROM sensor_readings "
@@ -100,7 +92,7 @@ def get_recent_readings(n=6):
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
-        rows.reverse()  # oldest first
+        rows.reverse()
         return rows
     except Exception as e:
         print(f"⚠️ Could not fetch recent readings: {e}")
@@ -108,54 +100,42 @@ def get_recent_readings(n=6):
 
 # =========================================
 # RULE-BASED FALLBACK PREDICTION
-# Used when the ML model is not yet trained
-# with multiple classes (e.g. early stage).
-# Thresholds based on Mandaue flood history.
 # =========================================
 def rule_based_predict(sensor_data):
     wl   = sensor_data.get("water_level", 0)
-    rain = sensor_data.get("rainfall", 0)
-    flow = sensor_data.get("flow_rate", 0)
-    r3h  = sensor_data.get("rain_3h", rain)
-    rise = sensor_data.get("rise_rate", 0)
+    rain = sensor_data.get("rainfall",    0)
+    flow = sensor_data.get("flow_rate",   0)
+    r3h  = sensor_data.get("rain_3h",     rain)
+    rise = sensor_data.get("rise_rate",   0)
 
-    # High risk thresholds
     if wl > 150 or r3h > 50 or (rise > 10 and wl > 100):
-        return "High", "red", 85.0
-    # Moderate risk
+        return "High",     "red",    85.0
     elif wl > 80 or r3h > 20 or flow > 3.0:
         return "Moderate", "orange", 75.0
-    # Low risk
     else:
-        return "Low", "green", 90.0
+        return "Low",      "green",  90.0
 
 # =========================================
 # PREDICTION FUNCTION
-# Computes real rolling features from DB
 # =========================================
 def ml_predict_from_sensor(sensor_data, clf):
-    # Fetch recent readings to compute rolling features
     history = get_recent_readings(6)
 
     if len(history) >= 2:
         rain_values  = [r["total_rain"]  for r in history]
         water_values = [r["water_level"] for r in history]
-
-        rain_3h  = sum(rain_values[-3:])   if len(rain_values)  >= 3 else sum(rain_values)
-        rain_6h  = sum(rain_values[-6:])   if len(rain_values)  >= 6 else sum(rain_values)
+        rain_3h   = sum(rain_values[-3:])  if len(rain_values)  >= 3 else sum(rain_values)
+        rain_6h   = sum(rain_values[-6:])  if len(rain_values)  >= 6 else sum(rain_values)
         rise_rate = water_values[-1] - water_values[-2]
     else:
-        # Not enough history yet — use current reading as best guess
         rain_3h   = sensor_data["rainfall"]
         rain_6h   = sensor_data["rainfall"]
         rise_rate = 0.0
 
-    # Attach computed features so rule-based fallback can also use them
     sensor_data["rain_3h"]   = rain_3h
     sensor_data["rain_6h"]   = rain_6h
     sensor_data["rise_rate"] = rise_rate
 
-    # If no valid ML model, use rule-based prediction
     if clf is None:
         return rule_based_predict(sensor_data)
 
@@ -170,9 +150,9 @@ def ml_predict_from_sensor(sensor_data, clf):
     }])
 
     try:
-        pred         = clf.predict(df)[0]
+        pred          = clf.predict(df)[0]
         probabilities = clf.predict_proba(df)[0]
-        confidence   = round(max(probabilities) * 100, 2)
+        confidence    = round(max(probabilities) * 100, 2)
     except Exception as e:
         print(f"⚠️ ML prediction error: {e} — using rule-based fallback")
         return rule_based_predict(sensor_data)
@@ -183,6 +163,64 @@ def ml_predict_from_sensor(sensor_data, clf):
         return "Moderate", "orange", confidence
     else:
         return "High",     "red",    confidence
+
+# =========================================
+# AUTO-RETRAIN ENDPOINT
+# =========================================
+@app.route("/retrain", methods=["GET", "POST"])
+def retrain():
+    try:
+        print("🔄 Auto-retrain triggered...")
+        conn = get_db_connection()
+        df   = pd.read_sql(
+            "SELECT * FROM sensor_readings ORDER BY timestamp ASC", conn
+        )
+        conn.close()
+
+        if len(df) < 10:
+            return jsonify({"status": "skipped",
+                            "reason": f"Only {len(df)} rows — need at least 10"}), 200
+
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values("timestamp").reset_index(drop=True)
+        df["rain_3h"]   = df["total_rain"].rolling(window=3, min_periods=1).sum()
+        df["rain_6h"]   = df["total_rain"].rolling(window=6, min_periods=1).sum()
+        df["rise_rate"] = df["water_level"].diff().fillna(0)
+        df["month"]     = df["timestamp"].dt.month
+        df = df.fillna(0)
+
+        if df["flooded"].nunique() < 2:
+            df["flooded"] = df.apply(
+                lambda r: 2 if (r.water_level > 150 or r.total_rain > 30)
+                         else (1 if (r.water_level > 80 or r.total_rain > 15
+                                     or r.flow_rate > 3)
+                         else 0), axis=1
+            )
+
+        if df["flooded"].nunique() < 2:
+            return jsonify({"status": "skipped",
+                            "reason": "Still only 1 class after auto-label"}), 200
+
+        from sklearn.ensemble import RandomForestClassifier
+        features = ["total_rain", "water_level", "flow_rate",
+                    "rain_3h", "rain_6h", "rise_rate", "month"]
+        X = df[features]
+        y = df["flooded"].astype(int)
+
+        clf = RandomForestClassifier(
+            n_estimators=300, max_depth=10,
+            class_weight="balanced", random_state=42
+        )
+        clf.fit(X, y)
+        joblib.dump(clf, MODEL_PATH)
+
+        msg = f"✅ Retrained on {len(df)} rows — classes: {sorted(y.unique().tolist())}"
+        print(msg)
+        return jsonify({"status": "success", "message": msg, "rows": len(df)}), 200
+
+    except Exception as e:
+        print(f"❌ Retrain error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # =========================================
 # ESP32 SENSOR ENDPOINT
@@ -197,7 +235,6 @@ def receive_sensor():
     rainfall    = float(data.get("totalRain",  0))
     flow_rate   = float(data.get("flowRate",   0))
 
-    # Update in-memory latest
     latest_sensor_data["water_level"] = water_level
     latest_sensor_data["rainfall"]    = rainfall
     latest_sensor_data["flow_rate"]   = flow_rate
@@ -207,11 +244,11 @@ def receive_sensor():
     try:
         conn   = get_db_connection()
         cursor = conn.cursor()
-        query  = """
-            INSERT INTO sensor_readings (total_rain, water_level, flow_rate)
-            VALUES (%s, %s, %s)
-        """
-        cursor.execute(query, (rainfall, water_level, flow_rate))
+        cursor.execute(
+            "INSERT INTO sensor_readings (total_rain, water_level, flow_rate) "
+            "VALUES (%s, %s, %s)",
+            (rainfall, water_level, flow_rate)
+        )
         conn.commit()
         print(f"✅ DB Insert: rain={rainfall}, water={water_level}, flow={flow_rate}")
     except mysql.connector.Error as e:
@@ -232,42 +269,73 @@ def receive_sensor():
 def map_data():
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     data_list = []
-
-    clf = load_model()  # None triggers rule-based fallback — never crashes
+    clf       = load_model()
 
     for loc in MONITORED_SITES:
+
+        # ── OpenWeatherMap: temperature, humidity, 3h forecast ──
+        temp             = 28
+        humidity         = 70
+        forecast_rain_3h = 0.0
+
         try:
-            url = (
+            # Current weather — temperature and humidity
+            url_weather = (
                 f"https://api.openweathermap.org/data/2.5/weather"
                 f"?lat={loc['lat']}&lon={loc['lng']}&appid={API_KEY}&units=metric"
             )
-            r        = requests.get(url, timeout=5).json()
-            rainfall = r.get("rain", {}).get("1h", 0)
+            r        = requests.get(url_weather, timeout=5).json()
             temp     = r["main"]["temp"]
             humidity = r["main"]["humidity"]
         except Exception:
-            rainfall = 0
-            temp     = 28
-            humidity = 70
+            pass
 
+        try:
+            # Forecast API — predicted rainfall for next 3 hours
+            url_forecast = (
+                f"https://api.openweathermap.org/data/2.5/forecast"
+                f"?lat={loc['lat']}&lon={loc['lng']}&appid={API_KEY}&units=metric&cnt=1"
+            )
+            f_data           = requests.get(url_forecast, timeout=5).json()
+            forecast_rain_3h = f_data["list"][0].get("rain", {}).get("3h", 0.0)
+        except Exception:
+            forecast_rain_3h = 0.0
+
+        # ── ESP32 sensor data for all rain/water readings ──
         risk, color, confidence = ml_predict_from_sensor(latest_sensor_data, clf)
 
         water_level_cm = latest_sensor_data["water_level"]
-        rain_3h        = latest_sensor_data.get("rain_3h", 0)
+        current_rain   = latest_sensor_data["rainfall"]
+        rain_3h        = latest_sensor_data.get("rain_3h",   0)
+        rain_6h        = latest_sensor_data.get("rain_6h",   0)
         rise_rate      = latest_sensor_data.get("rise_rate", 0)
+        flow_rate      = latest_sensor_data["flow_rate"]
+
+        # Forecast label — warn if significant rain expected
+        if forecast_rain_3h >= 10:
+            forecast_label = f'<span style="color:red;font-weight:bold;">{forecast_rain_3h:.2f} mm ⚠️ Heavy</span>'
+        elif forecast_rain_3h >= 2.5:
+            forecast_label = f'<span style="color:orange;font-weight:bold;">{forecast_rain_3h:.2f} mm ⚠️ Moderate</span>'
+        else:
+            forecast_label = f'<span style="color:green;">{forecast_rain_3h:.2f} mm (Light/None)</span>'
 
         popup = f"""
         <div style="font-size:14px;">
             <b>{loc['name']}</b><br><br>
             🌊 <b>Flood Risk:</b> <span style="color:{color}; font-weight:bold;">{risk}</span><br>
             🎯 <b>Confidence:</b> {confidence}%<br><br>
-            🌧 Rainfall (now): {rainfall:.2f} mm<br>
-            🌧 Rainfall (3h): {rain_3h:.2f} mm<br>
-            📏 Water Level: {water_level_cm:.2f} cm<br>
-            📈 Rise Rate: {rise_rate:.2f} cm/reading<br>
-            🌡 Temperature: {temp:.1f} °C<br>
-            💧 Humidity: {humidity}%<br><br>
-            🕒 Updated: {timestamp}
+            <b>── Sensor Readings ──</b><br>
+            🌧 <b>Rainfall (now):</b>  {current_rain:.2f} mm<br>
+            🌧 <b>Rainfall (3h):</b>   {rain_3h:.2f} mm<br>
+            🌧 <b>Rainfall (6h):</b>   {rain_6h:.2f} mm<br>
+            📏 <b>Water Level:</b>     {water_level_cm:.2f} cm<br>
+            📈 <b>Rise Rate:</b>       {rise_rate:.2f} cm/reading<br>
+            💧 <b>Flow Rate:</b>       {flow_rate:.2f} L<br><br>
+            <b>── Weather Forecast ──</b><br>
+            🔮 <b>Rainfall (next 3h):</b> {forecast_label}<br>
+            🌡 <b>Temperature:</b>     {temp:.1f} °C<br>
+            💧 <b>Humidity:</b>        {humidity}%<br><br>
+            🕒 <b>Updated:</b> {timestamp}
         </div>
         """
 
@@ -284,56 +352,6 @@ def map_data():
 # =========================================
 # MAIN PAGE
 # =========================================
-# =========================================
-# AUTO-RETRAIN ENDPOINT
-# =========================================
-@app.route("/retrain", methods=["GET", "POST"])
-def retrain():
-    try:
-        print("🔄 Auto-retrain triggered...")
-        conn = get_db_connection()
-        df   = pd.read_sql("SELECT * FROM sensor_readings ORDER BY timestamp ASC", conn)
-        conn.close()
-
-        if len(df) < 10:
-            return jsonify({"status": "skipped", "reason": f"Only {len(df)} rows — need at least 10"}), 200
-
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df = df.sort_values("timestamp").reset_index(drop=True)
-        df["rain_3h"]   = df["total_rain"].rolling(window=3, min_periods=1).sum()
-        df["rain_6h"]   = df["total_rain"].rolling(window=6, min_periods=1).sum()
-        df["rise_rate"] = df["water_level"].diff().fillna(0)
-        df["month"]     = df["timestamp"].dt.month
-        df = df.fillna(0)
-
-        if df["flooded"].nunique() < 2:
-            df["flooded"] = df.apply(
-                lambda r: 2 if (r.water_level > 150 or r.total_rain > 30)
-                         else (1 if (r.water_level > 80 or r.total_rain > 15 or r.flow_rate > 3)
-                         else 0), axis=1
-            )
-
-        if df["flooded"].nunique() < 2:
-            return jsonify({"status": "skipped", "reason": "Still only 1 class"}), 200
-
-        from sklearn.ensemble import RandomForestClassifier
-        features = ["total_rain", "water_level", "flow_rate",
-                    "rain_3h", "rain_6h", "rise_rate", "month"]
-        X = df[features]
-        y = df["flooded"].astype(int)
-
-        clf = RandomForestClassifier(n_estimators=300, max_depth=10,
-                                     class_weight="balanced", random_state=42)
-        clf.fit(X, y)
-        joblib.dump(clf, MODEL_PATH)
-
-        msg = f"✅ Retrained on {len(df)} rows"
-        print(msg)
-        return jsonify({"status": "success", "message": msg, "rows": len(df)}), 200
-
-    except Exception as e:
-        print(f"❌ Retrain error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
 @app.route("/")
 def home():
     return render_template("map.html")
@@ -343,10 +361,7 @@ def home():
 # =========================================
 if __name__ == "__main__":
     print("FloodGuide Running...")
-
-    # Start keep-alive thread only when not in debug reload subprocess
     if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         t = threading.Thread(target=keep_alive, daemon=True)
         t.start()
-
     app.run(host="0.0.0.0", port=5000, debug=True)
