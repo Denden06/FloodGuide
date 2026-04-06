@@ -124,16 +124,13 @@ def ml_predict_from_sensor(sensor_data, clf):
     if len(history) >= 2:
         rain_values  = [r["total_rain"]  for r in history]
         water_values = [r["water_level"] for r in history]
-        rain_3h   = sum(rain_values[-3:])  if len(rain_values)  >= 3 else sum(rain_values)
-        rain_6h   = sum(rain_values[-6:])  if len(rain_values)  >= 6 else sum(rain_values)
+        rain_3h   = sum(rain_values[-3:]) if len(rain_values) >= 3 else sum(rain_values)
         rise_rate = water_values[-1] - water_values[-2]
     else:
         rain_3h   = sensor_data["rainfall"]
-        rain_6h   = sensor_data["rainfall"]
         rise_rate = 0.0
 
     sensor_data["rain_3h"]   = rain_3h
-    sensor_data["rain_6h"]   = rain_6h
     sensor_data["rise_rate"] = rise_rate
 
     if clf is None:
@@ -144,7 +141,6 @@ def ml_predict_from_sensor(sensor_data, clf):
         "water_level": sensor_data["water_level"],
         "flow_rate":   sensor_data["flow_rate"],
         "rain_3h":     rain_3h,
-        "rain_6h":     rain_6h,
         "rise_rate":   rise_rate,
         "month":       datetime.now().month
     }])
@@ -184,7 +180,6 @@ def retrain():
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df = df.sort_values("timestamp").reset_index(drop=True)
         df["rain_3h"]   = df["total_rain"].rolling(window=3, min_periods=1).sum()
-        df["rain_6h"]   = df["total_rain"].rolling(window=6, min_periods=1).sum()
         df["rise_rate"] = df["water_level"].diff().fillna(0)
         df["month"]     = df["timestamp"].dt.month
         df = df.fillna(0)
@@ -202,8 +197,7 @@ def retrain():
                             "reason": "Still only 1 class after auto-label"}), 200
 
         from sklearn.ensemble import RandomForestClassifier
-        features = ["total_rain", "water_level", "flow_rate",
-                    "rain_3h", "rain_6h", "rise_rate", "month"]
+        features = ["total_rain", "water_level", "flow_rate", "rain_3h", "rise_rate", "month"]
         X = df[features]
         y = df["flooded"].astype(int)
 
@@ -273,13 +267,12 @@ def map_data():
 
     for loc in MONITORED_SITES:
 
-        # ── OpenWeatherMap: temperature, humidity, 3h forecast ──
+        # OpenWeatherMap: temperature, humidity, 3h forecast
         temp             = 28
         humidity         = 70
         forecast_rain_3h = 0.0
 
         try:
-            # Current weather — temperature and humidity
             url_weather = (
                 f"https://api.openweathermap.org/data/2.5/weather"
                 f"?lat={loc['lat']}&lon={loc['lng']}&appid={API_KEY}&units=metric"
@@ -291,7 +284,6 @@ def map_data():
             pass
 
         try:
-            # Forecast API — predicted rainfall for next 3 hours
             url_forecast = (
                 f"https://api.openweathermap.org/data/2.5/forecast"
                 f"?lat={loc['lat']}&lon={loc['lng']}&appid={API_KEY}&units=metric&cnt=1"
@@ -301,23 +293,25 @@ def map_data():
         except Exception:
             forecast_rain_3h = 0.0
 
-        # ── ESP32 sensor data for all rain/water readings ──
+        # ESP32 sensor data
         risk, color, confidence = ml_predict_from_sensor(latest_sensor_data, clf)
 
         water_level_cm = latest_sensor_data["water_level"]
         current_rain   = latest_sensor_data["rainfall"]
         rain_3h        = latest_sensor_data.get("rain_3h",   0)
-        rain_6h        = latest_sensor_data.get("rain_6h",   0)
         rise_rate      = latest_sensor_data.get("rise_rate", 0)
         flow_rate      = latest_sensor_data["flow_rate"]
 
-        # Forecast label — warn if significant rain expected
+        # Color-coded forecast label
         if forecast_rain_3h >= 10:
-            forecast_label = f'<span style="color:red;font-weight:bold;">{forecast_rain_3h:.2f} mm ⚠️ Heavy</span>'
+            forecast_label = (f'<span style="color:red;font-weight:bold;">'
+                              f'{forecast_rain_3h:.2f} mm ⚠️ Heavy</span>')
         elif forecast_rain_3h >= 2.5:
-            forecast_label = f'<span style="color:orange;font-weight:bold;">{forecast_rain_3h:.2f} mm ⚠️ Moderate</span>'
+            forecast_label = (f'<span style="color:orange;font-weight:bold;">'
+                              f'{forecast_rain_3h:.2f} mm ⚠️ Moderate</span>')
         else:
-            forecast_label = f'<span style="color:green;">{forecast_rain_3h:.2f} mm (Light/None)</span>'
+            forecast_label = (f'<span style="color:green;">'
+                              f'{forecast_rain_3h:.2f} mm (Light/None)</span>')
 
         popup = f"""
         <div style="font-size:14px;">
@@ -327,7 +321,6 @@ def map_data():
             <b>── Sensor Readings ──</b><br>
             🌧 <b>Rainfall (now):</b>  {current_rain:.2f} mm<br>
             🌧 <b>Rainfall (3h):</b>   {rain_3h:.2f} mm<br>
-            🌧 <b>Rainfall (6h):</b>   {rain_6h:.2f} mm<br>
             📏 <b>Water Level:</b>     {water_level_cm:.2f} cm<br>
             📈 <b>Rise Rate:</b>       {rise_rate:.2f} cm/reading<br>
             💧 <b>Flow Rate:</b>       {flow_rate:.2f} L<br><br>
