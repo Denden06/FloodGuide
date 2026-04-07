@@ -73,8 +73,8 @@ function loadFloodMarkers() {
 // Load once immediately
 loadFloodMarkers();
 
-// Auto refresh every 30 seconds
-setInterval(loadFloodMarkers, 20000);
+// Auto refresh every 60 seconds
+setInterval(loadFloodMarkers, 60000);
 // ===============================
 // ICON STYLE BASED ON RISK COLOR WITH PULSE
 // ===============================
