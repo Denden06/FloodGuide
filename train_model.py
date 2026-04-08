@@ -3,16 +3,22 @@ import numpy as np
 import joblib
 import mysql.connector
 import os
-import sys
 from datetime import datetime
 
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, mean_absolute_error, r2_score
+from sklearn.metrics import classification_report
+import warnings
 
-# ===============================
-# DATABASE CONNECTION (Clever Cloud)
-# ===============================
+warnings.filterwarnings("ignore")
+
+# =========================================
+# CONFIG
+# =========================================
+CSV_PATH = "Mactan_Daily_Data.csv"
+MODEL_PATH = "model_class.pkl"
+
+
 def get_db_connection():
     return mysql.connector.connect(
         host=os.getenv("MYSQLHOST", "b7hubkhd0btnnd1gtw6f-mysql.services.clever-cloud.com"),
@@ -20,263 +26,254 @@ def get_db_connection():
         password=os.getenv("MYSQLPASSWORD", "X0kiVkBuBLacKOxNtUkI"),
         database=os.getenv("MYSQLDATABASE", "b7hubkhd0btnnd1gtw6f"),
         port=int(os.getenv("MYSQLPORT", 3306)),
-        connection_timeout=10
+        connection_timeout=10,
+        ssl_disabled=False
     )
 
-# ===============================
-# MIGRATE TABLE
-# ===============================
-def migrate_table():
-    print("🔧 Checking database schema...")
-    conn   = get_db_connection()
-    cursor = conn.cursor()
-    migrations = [
-        "ALTER TABLE sensor_readings ADD COLUMN flooded TINYINT NOT NULL DEFAULT 0",
-        "ALTER TABLE sensor_readings ADD COLUMN subside_time FLOAT NOT NULL DEFAULT 0",
-    ]
-    for sql in migrations:
-        try:
-            cursor.execute(sql)
-            conn.commit()
-        except mysql.connector.Error as e:
-            if e.errno != 1060:
-                print(f"  ⚠️ Migration warning: {e}")
-    cursor.close()
-    conn.close()
-    print("✅ Schema is ready.\n")
 
-# ===============================
-# AUTO-LABEL IF NEEDED
-# ===============================
-def auto_label_if_needed():
-    print("🏷️  Checking if flood labels exist...")
-    conn   = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM sensor_readings WHERE flooded > 0")
-    labelled_count = cursor.fetchone()[0]
+# =========================================
+# STEP 1 — LOAD AND CLEAN PAGASA CSV
+# =========================================
+def load_pagasa_csv():
+    print("📂 Loading PAGASA data from:", CSV_PATH)
 
-    if labelled_count > 0:
-        print(f"  ✅ {labelled_count} labelled rows found — skipping auto-label.\n")
-        cursor.close()
-        conn.close()
-        return
+    if not os.path.exists(CSV_PATH):
+        print(f"❌ File not found: {CSV_PATH}")
+        print("   Make sure Mactan_Daily_Data.csv is in the same folder.")
+        return None
 
-    print("  ⚠️  No labels found — applying rule-based auto-labelling...")
-    cursor.execute("SELECT id, total_rain, water_level, flow_rate FROM sensor_readings")
-    rows = cursor.fetchall()
+    df = pd.read_csv(CSV_PATH)
+    df.columns = df.columns.str.strip().str.upper()
 
-    updates = []
-    for (row_id, rain, wl, flow) in rows:
-        rain = rain or 0
-        wl   = wl   or 0
-        flow = flow or 0
-        if wl > 150 or rain > 30:
-            label = 2
-        elif wl > 80 or rain > 15 or flow > 3.0:
-            label = 1
+    print(f"   Raw rows: {len(df)}")
+    print(f"   Columns: {df.columns.tolist()}")
+    print(f"   Years: {sorted(df['YEAR'].unique().tolist())}")
+
+    # Convert RAINFALL — handle special values
+    df['RAINFALL'] = pd.to_numeric(df['RAINFALL'], errors='coerce')
+    df['RAINFALL'] = df['RAINFALL'].apply(
+        lambda x: 0.05 if x == -1.0  # -1 = Trace (<0.1mm) → use 0.05
+        else (np.nan if x <= -999.0  # -999 = Missing → NaN
+              else x)
+    )
+    df['RAINFALL'] = df['RAINFALL'].fillna(0).clip(lower=0)
+
+    # Build timestamp
+    df['timestamp'] = pd.to_datetime(
+        df[['YEAR', 'MONTH', 'DAY']].rename(
+            columns={'YEAR': 'year', 'MONTH': 'month', 'DAY': 'day'}
+        )
+    )
+
+    df = df.sort_values('timestamp').reset_index(drop=True)
+
+    print(f"   Valid rows after cleaning: {len(df)}")
+    print(f"   Date range: {df['timestamp'].min().date()} → {df['timestamp'].max().date()}")
+    return df
+
+
+# =========================================
+# STEP 2 — ENGINEER FEATURES AND LABELS
+# =========================================
+def prepare_pagasa_features(df):
+    print("\n🔧 Engineering features...")
+
+    # Rolling rainfall sums (daily data, so window=3 = 3-day sum)
+    df['rain_3h'] = df['RAINFALL'].rolling(window=3, min_periods=1).sum()
+    df['rise_rate'] = 0.0  # PAGASA has no water level — use 0
+    df['water_level'] = 0.0
+    df['flow_rate'] = 0.0
+    df['month'] = df['MONTH']
+    df['subside_time'] = 0.0
+
+    # ── FLOOD LABELING ──
+    # Based on PAGASA rainfall warning thresholds:
+    # Yellow:  >7.5mm/hr  → 15mm daily moderate alert
+    # Orange:  >15mm/hr   → 30mm daily high alert
+    # Red:     >30mm/hr   → extreme rainfall
+    # Source: PAGASA Rainfall Warning System
+    def label_flood(row):
+        rain = row['RAINFALL']
+        r3 = row['rain_3h']
+
+        # High risk — extreme/heavy rain or sustained 3-day accumulation
+        if rain > 30 or r3 > 60:
+            return 2
+
+        # Moderate risk — significant rain or moderate 3-day accumulation
+        elif rain > 15 or r3 > 30:
+            return 1
+
+        # Low risk
         else:
-            label = 0
-        updates.append((label, row_id))
+            return 0
 
-    if updates:
-        cursor.executemany(
-            "UPDATE sensor_readings SET flooded = %s WHERE id = %s", updates
-        )
-        conn.commit()
-        counts = {0: 0, 1: 0, 2: 0}
-        for (label, _) in updates:
-            counts[label] += 1
-        print(f"  Auto-labelled {len(updates)} rows:")
-        print(f"    Low (0):      {counts[0]}")
-        print(f"    Moderate (1): {counts[1]}")
-        print(f"    High (2):     {counts[2]}\n")
+    df['flooded'] = df.apply(label_flood, axis=1)
 
-    cursor.close()
-    conn.close()
+    # Print distribution
+    counts = df['flooded'].value_counts().sort_index()
+    total = len(df)
+    print(f"\n📊 Label distribution (from real PAGASA thresholds):")
+    print(f"   Low  (0): {counts.get(0, 0):4d} days ({counts.get(0, 0) / total * 100:.1f}%)")
+    print(f"   Mod  (1): {counts.get(1, 0):4d} days ({counts.get(1, 0) / total * 100:.1f}%)")
+    print(f"   High (2): {counts.get(2, 0):4d} days ({counts.get(2, 0) / total * 100:.1f}%)")
+    print(f"   Total:    {total} days")
 
-# ===============================
-# IMPORT PAGASA CSV
-# Usage: python train_model.py --import pagasa_data.csv
-# ===============================
-def import_pagasa_csv(filepath):
-    print(f"📂 Importing PAGASA data from: {filepath}")
-    if not os.path.exists(filepath):
-        print(f"❌ File not found: {filepath}")
-        return
+    return df
 
-    df = pd.read_csv(filepath)
-    df.columns = df.columns.str.lower().str.strip()
 
-    rename = {}
-    for col in df.columns:
-        if col in ("datetime", "date", "time"):          rename[col] = "timestamp"
-        elif col in ("rainfall", "rain", "rain_mm"):     rename[col] = "total_rain"
-        elif col in ("water_level_cm", "waterlevel"):    rename[col] = "water_level"
-        elif col in ("flow", "flowrate", "flow_lps"):    rename[col] = "flow_rate"
-    df.rename(columns=rename, inplace=True)
+# =========================================
+# STEP 3 — IMPORT INTO DATABASE
+# =========================================
+def import_to_db(df):
+    print("\n💾 Importing PAGASA data into Clever Cloud database...")
 
-    required = ["timestamp", "total_rain", "water_level", "flow_rate"]
-    missing  = [c for c in required if c not in df.columns]
-    if missing:
-        print(f"❌ CSV missing columns: {missing}")
-        return
-
-    df["timestamp"]   = pd.to_datetime(df["timestamp"])
-    df["total_rain"]  = pd.to_numeric(df["total_rain"],  errors="coerce").fillna(0)
-    df["water_level"] = pd.to_numeric(df["water_level"], errors="coerce").fillna(0)
-    df["flow_rate"]   = pd.to_numeric(df["flow_rate"],   errors="coerce").fillna(0)
-
-    if "flooded" not in df.columns:
-        df["flooded"] = df.apply(
-            lambda r: 2 if (r.water_level > 150 or r.total_rain > 30)
-                     else (1 if (r.water_level > 80 or r.total_rain > 15 or r.flow_rate > 3)
-                     else 0), axis=1
-        )
-    if "subside_time" not in df.columns:
-        df["subside_time"] = 0.0
-
-    conn   = get_db_connection()
-    cursor = conn.cursor()
-    inserted = 0
-    for _, row in df.iterrows():
-        try:
-            cursor.execute(
-                """INSERT INTO sensor_readings
-                   (timestamp, total_rain, water_level, flow_rate, flooded, subside_time)
-                   VALUES (%s, %s, %s, %s, %s, %s)""",
-                (row["timestamp"], row["total_rain"], row["water_level"],
-                 row["flow_rate"], int(row["flooded"]), float(row["subside_time"]))
-            )
-            inserted += 1
-        except Exception as e:
-            print(f"  ⚠️ Row error: {e}")
-    conn.commit()
-    cursor.close()
-    conn.close()
-    print(f"✅ Imported {inserted} rows.\n")
-
-# ===============================
-# LOAD DATA
-# ===============================
-def load_sensor_data():
     try:
         conn = get_db_connection()
-        df   = pd.read_sql("SELECT * FROM sensor_readings ORDER BY timestamp ASC", conn)
+        cursor = conn.cursor()
+
+        # Add device_id column if missing
+        try:
+            cursor.execute(
+                "ALTER TABLE sensor_readings ADD COLUMN device_id VARCHAR(20) NOT NULL DEFAULT 'bridge1'"
+            )
+            conn.commit()
+            print("   ✅ device_id column added")
+        except mysql.connector.Error as e:
+            if e.errno == 1060:
+                print("   ℹ️  device_id column already exists")
+            else:
+                print(f"   ⚠️  Column warning: {e}")
+
+        # Check how many PAGASA rows already exist
+        cursor.execute(
+            "SELECT COUNT(*) FROM sensor_readings WHERE device_id = 'pagasa'"
+        )
+        existing = cursor.fetchone()[0]
+
+        if existing > 0:
+            print(f"   ℹ️  {existing} PAGASA rows already in DB — skipping import.")
+            print("      Delete them first if you want to reimport.")
+            cursor.close()
+            conn.close()
+            return True
+
+        # Insert all rows
+        inserted = 0
+        errors = 0
+
+        for _, row in df.iterrows():
+            try:
+                cursor.execute(
+                    """INSERT INTO sensor_readings
+                       (device_id, timestamp, total_rain, water_level,
+                        flow_rate, flooded, subside_time)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        'pagasa',  # mark as PAGASA data
+                        row['timestamp'],
+                        float(row['RAINFALL']),
+                        float(row['water_level']),  # 0.0 — not in PAGASA data
+                        float(row['flow_rate']),  # 0.0 — not in PAGASA data
+                        int(row['flooded']),
+                        float(row['subside_time'])
+                    )
+                )
+                inserted += 1
+            except Exception as e:
+                errors += 1
+
+        conn.commit()
+        cursor.close()
         conn.close()
-        return df
+
+        print(f"   ✅ Inserted {inserted} rows | Errors: {errors}")
+        return True
+
     except Exception as e:
-        print("❌ Error loading data:", e)
-        return pd.DataFrame()
+        print(f"   ❌ DB connection failed: {e}")
+        print("   ⚠️  Training locally only (model will still be saved)")
+        return False
 
-# ===============================
-# FEATURE ENGINEERING
-# ===============================
-def prepare_features(df):
-    if df.empty:
-        print("❌ No data to train on!")
-        return None, None, None
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values("timestamp").reset_index(drop=True)
-    df["rain_3h"]   = df["total_rain"].rolling(window=3, min_periods=1).sum()
-    df["rain_6h"]   = df["total_rain"].rolling(window=6, min_periods=1).sum()
-    df["rise_rate"] = df["water_level"].diff().fillna(0)
-    df["month"]     = df["timestamp"].dt.month
-    df = df.fillna(0)
+# =========================================
+# STEP 4 — TRAIN MODEL
+# =========================================
+def train_model(df):
+    print("\n🌲 Training flood risk model on PAGASA data...")
 
-    features = ["total_rain", "water_level", "flow_rate",
-                "rain_3h", "rain_6h", "rise_rate", "month"]
+    features = ['RAINFALL', 'water_level', 'flow_rate',
+                'rain_3h', 'rise_rate', 'month']
 
-    if "flooded"      not in df.columns: df["flooded"]      = 0
-    if "subside_time" not in df.columns: df["subside_time"] = 0
+    # Rename RAINFALL to match the model's expected feature name
+    df = df.rename(columns={'RAINFALL': 'total_rain'})
+    features = ['total_rain', 'water_level', 'flow_rate',
+                'rain_3h', 'rise_rate', 'month']
 
-    X       = df[features]
-    y_class = df["flooded"].astype(int)
-    y_reg   = df["subside_time"].astype(float)
+    X = df[features]
+    y = df['flooded'].astype(int)
 
-    print(f"\n📊 Label distribution:\n{y_class.value_counts().sort_index().to_string()}")
-    print(f"   Unique classes: {y_class.nunique()}")
-
-    if y_class.nunique() < 2:
-        print("\n❌ TRAINING ABORTED: Only one class in labels.")
-        print("   Run: python train_model.py --import your_pagasa_data.csv")
-        return None, None, None
-
-    return X, y_class, y_reg
-
-# ===============================
-# TRAIN MODELS
-# ===============================
-def train_models(X, y_class, y_reg):
-    if len(X) < 10:
-        print(f"⚠️  Only {len(X)} rows — using all data for training.")
-        X_train = X_test = X
-        y_class_train = y_class_test = y_class
-        y_reg_train   = y_reg_test   = y_reg
-    else:
-        X_train, X_test, y_class_train, y_class_test = train_test_split(
-            X, y_class, test_size=0.2, random_state=42, stratify=y_class
-        )
-        _, _, y_reg_train, y_reg_test = train_test_split(
-            X, y_reg, test_size=0.2, random_state=42
-        )
-
-    print("\n🌲 Training flood risk classifier...")
-    clf = RandomForestClassifier(
-        n_estimators=300, max_depth=10,
-        class_weight="balanced", random_state=42
+    # Stratified split to keep class proportions
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
-    clf.fit(X_train, y_class_train)
+
+    clf = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=10,
+        class_weight="balanced",  # handles class imbalance
+        random_state=42,
+        n_jobs=-1
+    )
+    clf.fit(X_train, y_train)
     y_pred = clf.predict(X_test)
+
     print("\n===== CLASSIFICATION REPORT =====")
-    print(classification_report(y_class_test, y_pred,
-                                target_names=["Low", "Moderate", "High"],
-                                zero_division=0))
+    print(classification_report(
+        y_test, y_pred,
+        target_names=["Low", "Moderate", "High"],
+        zero_division=0
+    ))
 
-    print("🌲 Training subside time regressor...")
-    reg = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
-    reg.fit(X_train, y_reg_train)
-    y_reg_pred = reg.predict(X_test)
-    print("===== REGRESSION METRICS =====")
-    print("MAE:", round(mean_absolute_error(y_reg_test, y_reg_pred), 4))
-    print("R2: ", round(r2_score(y_reg_test, y_reg_pred), 4))
-
-    feature_names = ["total_rain", "water_level", "flow_rate",
-                     "rain_3h", "rain_6h", "rise_rate", "month"]
-    importances = pd.Series(clf.feature_importances_, index=feature_names)
-    print("\n===== FEATURE IMPORTANCES =====")
+    # Feature importances
+    importances = pd.Series(clf.feature_importances_, index=features)
+    print("===== FEATURE IMPORTANCES =====")
     print(importances.sort_values(ascending=False).to_string())
 
-    joblib.dump(clf, "model_class.pkl")
-    joblib.dump(reg, "model_subside.pkl")
-    print("\n✅ Models saved: model_class.pkl, model_subside.pkl")
+    # Save model
+    joblib.dump(clf, MODEL_PATH)
+    print(f"\n✅ Model saved to {MODEL_PATH}")
+    print(f"   Classes: {clf.classes_.tolist()}")
+    print(f"   Trained on: {len(X_train)} samples | Tested on: {len(X_test)} samples")
 
-# ===============================
+    return clf
+
+
+# =========================================
 # MAIN
-# ===============================
+# =========================================
 if __name__ == "__main__":
-    if "--import" in sys.argv:
-        idx = sys.argv.index("--import")
-        if idx + 1 >= len(sys.argv):
-            print("❌ Usage: python train_model.py --import <path_to_csv>")
-            sys.exit(1)
-        migrate_table()
-        import_pagasa_csv(sys.argv[idx + 1])
+    print("=" * 50)
+    print("FloodGuide — PAGASA Data Import & Model Training")
+    print("=" * 50)
 
-    print("=" * 40)
-    print("FloodGuide Model Training")
-    print("=" * 40)
+    # Step 1
+    df = load_pagasa_csv()
+    if df is None:
+        exit(1)
 
-    migrate_table()
-    auto_label_if_needed()
+    # Step 2
+    df = prepare_pagasa_features(df)
 
-    print("📥 Loading sensor data from MySQL...")
-    df = load_sensor_data()
-    print(f"   {len(df)} rows loaded.\n")
+    # Step 3 — import to DB (optional — continues even if DB fails)
+    import_to_db(df)
 
-    result = prepare_features(df)
-    if result[0] is not None:
-        X, y_class, y_reg = result
-        train_models(X, y_class, y_reg)
-    else:
-        print("❌ Training could not proceed.")
+    # Step 4 — train model
+    clf = train_model(df)
+
+    print("\n" + "=" * 50)
+    print("DONE! Next steps:")
+    print("1. Upload model_class.pkl to your GitHub repo")
+    print("2. Render will auto-deploy with the new model")
+    print("3. Visit /retrain to verify the endpoint works")
+    print("=" * 50)
