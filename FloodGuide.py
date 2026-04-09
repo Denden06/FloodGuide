@@ -30,10 +30,22 @@ def get_db_connection():
 API_KEY    = "e2a8ee9c6e8ec237763497022a1309bb"
 MODEL_PATH = "model_class.pkl"
 
+# Separate in-memory state for EACH bridge
 latest_sensor_data = {
-    "water_level": 0.0,
-    "rainfall":    0.0,
-    "flow_rate":   0.0
+    "bridge1": {
+        "water_level": 0.0,
+        "rainfall":    0.0,
+        "flow_rate":   0.0,
+        "rain_3h":     0.0,
+        "rise_rate":   0.0
+    },
+    "bridge2": {
+        "water_level": 0.0,
+        "rainfall":    0.0,
+        "flow_rate":   0.0,
+        "rain_3h":     0.0,
+        "rise_rate":   0.0
+    }
 }
 
 MONITORED_SITES = [
@@ -79,15 +91,16 @@ def load_model():
         return None
 
 # =========================================
-# FETCH RECENT READINGS FOR ROLLING FEATURES
+# FETCH RECENT READINGS PER DEVICE
 # =========================================
-def get_recent_readings(n=6):
+def get_recent_readings(device_id, n=6):
     try:
         conn   = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
             "SELECT total_rain, water_level, flow_rate FROM sensor_readings "
-            "ORDER BY timestamp DESC LIMIT %s", (n,)
+            "WHERE device_id = %s ORDER BY timestamp DESC LIMIT %s",
+            (device_id, n)
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -95,7 +108,7 @@ def get_recent_readings(n=6):
         rows.reverse()
         return rows
     except Exception as e:
-        print(f"⚠️ Could not fetch recent readings: {e}")
+        print(f"⚠️ Could not fetch readings for {device_id}: {e}")
         return []
 
 # =========================================
@@ -116,10 +129,11 @@ def rule_based_predict(sensor_data):
         return "Low",      "green",  90.0
 
 # =========================================
-# PREDICTION FUNCTION
+# PREDICTION FUNCTION (per device)
 # =========================================
-def ml_predict_from_sensor(sensor_data, clf):
-    history = get_recent_readings(6)
+def ml_predict_from_sensor(device_id, clf):
+    sensor_data = latest_sensor_data[device_id].copy()
+    history     = get_recent_readings(device_id, 6)
 
     if len(history) >= 2:
         rain_values  = [r["total_rain"]  for r in history]
@@ -132,6 +146,10 @@ def ml_predict_from_sensor(sensor_data, clf):
 
     sensor_data["rain_3h"]   = rain_3h
     sensor_data["rise_rate"] = rise_rate
+
+    # Store back so popup can display them
+    latest_sensor_data[device_id]["rain_3h"]   = rain_3h
+    latest_sensor_data[device_id]["rise_rate"] = rise_rate
 
     if clf is None:
         return rule_based_predict(sensor_data)
@@ -197,7 +215,8 @@ def retrain():
                             "reason": "Still only 1 class after auto-label"}), 200
 
         from sklearn.ensemble import RandomForestClassifier
-        features = ["total_rain", "water_level", "flow_rate", "rain_3h", "rise_rate", "month"]
+        features = ["total_rain", "water_level", "flow_rate",
+                    "rain_3h", "rise_rate", "month"]
         X = df[features]
         y = df["flooded"].astype(int)
 
@@ -225,26 +244,35 @@ def receive_sensor():
     if not data:
         return jsonify({"error": "No JSON received"}), 400
 
+    # Read device_id from ESP32 payload
+    device_id   = data.get("deviceId", "bridge1")
     water_level = float(data.get("waterLevel", 0))
     rainfall    = float(data.get("totalRain",  0))
     flow_rate   = float(data.get("flowRate",   0))
 
-    latest_sensor_data["water_level"] = water_level
-    latest_sensor_data["rainfall"]    = rainfall
-    latest_sensor_data["flow_rate"]   = flow_rate
+    # Validate — only allow known devices
+    if device_id not in latest_sensor_data:
+        print(f"⚠️ Unknown device_id: {device_id} — defaulting to bridge1")
+        device_id = "bridge1"
+
+    # Update THIS bridge's in-memory state
+    latest_sensor_data[device_id]["water_level"] = water_level
+    latest_sensor_data[device_id]["rainfall"]    = rainfall
+    latest_sensor_data[device_id]["flow_rate"]   = flow_rate
 
     conn   = None
     cursor = None
     try:
         conn   = get_db_connection()
         cursor = conn.cursor()
+        # Save with device_id so each bridge's data is separate
         cursor.execute(
-            "INSERT INTO sensor_readings (total_rain, water_level, flow_rate) "
-            "VALUES (%s, %s, %s)",
-            (rainfall, water_level, flow_rate)
+            "INSERT INTO sensor_readings (device_id, total_rain, water_level, flow_rate) "
+            "VALUES (%s, %s, %s, %s)",
+            (device_id, rainfall, water_level, flow_rate)
         )
         conn.commit()
-        print(f"✅ DB Insert: rain={rainfall}, water={water_level}, flow={flow_rate}")
+        print(f"✅ DB Insert [{device_id}]: rain={rainfall}, water={water_level}, flow={flow_rate}")
     except mysql.connector.Error as e:
         print(f"❌ MySQL Error: {e}")
     except Exception as e:
@@ -253,8 +281,8 @@ def receive_sensor():
         if cursor: cursor.close()
         if conn:   conn.close()
 
-    print("Received from ESP32:", data)
-    return jsonify({"status": "received"})
+    print(f"Received from ESP32 [{device_id}]:", data)
+    return jsonify({"status": "received", "device": device_id})
 
 # =========================================
 # MAP DATA ENDPOINT
@@ -266,6 +294,7 @@ def map_data():
     clf       = load_model()
 
     for loc in MONITORED_SITES:
+        device_id = loc["id"]  # "bridge1" or "bridge2"
 
         # OpenWeatherMap: temperature, humidity, 3h forecast
         temp             = 28
@@ -293,14 +322,16 @@ def map_data():
         except Exception:
             forecast_rain_3h = 0.0
 
-        # ESP32 sensor data
-        risk, color, confidence = ml_predict_from_sensor(latest_sensor_data, clf)
+        # Get prediction using THIS bridge's own sensor data
+        risk, color, confidence = ml_predict_from_sensor(device_id, clf)
 
-        water_level_cm = latest_sensor_data["water_level"]
-        current_rain   = latest_sensor_data["rainfall"]
-        rain_3h        = latest_sensor_data.get("rain_3h",   0)
-        rise_rate      = latest_sensor_data.get("rise_rate", 0)
-        flow_rate      = latest_sensor_data["flow_rate"]
+        # Read THIS bridge's sensor values
+        sensor         = latest_sensor_data[device_id]
+        water_level_cm = sensor["water_level"]
+        current_rain   = sensor["rainfall"]
+        rain_3h        = sensor.get("rain_3h",   0)
+        rise_rate      = sensor.get("rise_rate", 0)
+        flow_rate      = sensor["flow_rate"]
 
         # Color-coded forecast label
         if forecast_rain_3h >= 10:
@@ -315,7 +346,8 @@ def map_data():
 
         popup = f"""
         <div style="font-size:14px;">
-            <b>{loc['name']}</b><br><br>
+            <b>{loc['name']}</b><br>
+            <small style="color:gray;">Sensor: {device_id}</small><br><br>
             🌊 <b>Flood Risk:</b> <span style="color:{color}; font-weight:bold;">{risk}</span><br>
             🎯 <b>Confidence:</b> {confidence}%<br><br>
             <b>── Sensor Readings ──</b><br>
