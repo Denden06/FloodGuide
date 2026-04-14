@@ -390,3 +390,74 @@ if __name__ == "__main__":
         t = threading.Thread(target=keep_alive, daemon=True)
         t.start()
     app.run(host="0.0.0.0", port=5000, debug=True)
+
+
+# =========================================
+# DASHBOARD PAGE + API
+# =========================================
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
+@app.route("/api/dashboard-data")
+def dashboard_data():
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Last 50 readings per bridge
+        cursor.execute(
+            "SELECT * FROM sensor_readings WHERE device_id = 'bridge1' "
+            "ORDER BY timestamp DESC LIMIT 50"
+        )
+        bridge1 = list(reversed(cursor.fetchall()))
+
+        cursor.execute(
+            "SELECT * FROM sensor_readings WHERE device_id = 'bridge2' "
+            "ORDER BY timestamp DESC LIMIT 50"
+        )
+        bridge2 = list(reversed(cursor.fetchall()))
+
+        # Recent 20 rows (all devices)
+        cursor.execute(
+            "SELECT * FROM sensor_readings ORDER BY timestamp DESC LIMIT 20"
+        )
+        recent = cursor.fetchall()
+
+        # Summary stats
+        cursor.execute("""
+            SELECT
+                COUNT(*)                                          AS total,
+                SUM(CASE WHEN flooded = 2 THEN 1 ELSE 0 END)    AS high,
+                SUM(CASE WHEN flooded = 1 THEN 1 ELSE 0 END)    AS moderate,
+                AVG(CASE WHEN device_id='bridge1'
+                         THEN water_level END)                   AS avg_water_level,
+                MAX(total_rain)                                  AS max_rain
+            FROM sensor_readings
+        """)
+        stats = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        # Convert timestamps to strings for JSON
+        def serialize(rows):
+            out = []
+            for r in rows:
+                row = dict(r)
+                if hasattr(row.get('timestamp'), 'isoformat'):
+                    row['timestamp'] = row['timestamp'].isoformat()
+                out.append(row)
+            return out
+
+        return jsonify({
+            "bridge1": serialize(bridge1),
+            "bridge2": serialize(bridge2),
+            "recent":  serialize(recent),
+            "stats":   {k: (float(v) if v is not None else 0)
+                        for k, v in stats.items()}
+        })
+
+    except Exception as e:
+        print(f"❌ Dashboard data error: {e}")
+        return jsonify({"error": str(e)}), 500
