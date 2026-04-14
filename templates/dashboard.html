@@ -1,47 +1,663 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Flood Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FloodGuide — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:        #0b0f1a;
+    --surface:   #111827;
+    --surface2:  #1a2235;
+    --border:    #1f2d45;
+    --text:      #e2e8f0;
+    --muted:     #64748b;
+    --accent:    #38bdf8;
+    --low:       #22c55e;
+    --moderate:  #f59e0b;
+    --high:      #ef4444;
+    --font-mono: 'Space Mono', monospace;
+    --font-sans: 'DM Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    min-height: 100vh;
+  }
+
+  /* ── HEADER ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+    text-decoration: none;
+  }
+
+  .logo span { color: var(--muted); font-weight: 400; }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  .live-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--low);
+  }
+
+  .live-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--low);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+  }
+
+  .nav-link {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .nav-link:hover { color: var(--text); }
+
+  /* ── LAYOUT ── */
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+  }
+
+  .page-title {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+  }
+
+  /* ── RISK CARDS ── */
+  .risk-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .risk-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+
+  .risk-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: 12px 12px 0 0;
+  }
+
+  .risk-card.low::before    { background: var(--low); }
+  .risk-card.moderate::before { background: var(--moderate); }
+  .risk-card.high::before   { background: var(--high); }
+
+  .bridge-name {
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.5rem;
+  }
+
+  .risk-label {
+    font-size: 1.8rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+
+  .risk-label.low      { color: var(--low); }
+  .risk-label.moderate { color: var(--moderate); }
+  .risk-label.high     { color: var(--high); }
+
+  .confidence-bar-wrap {
+    background: var(--border);
+    border-radius: 4px;
+    height: 4px;
+    margin: 0.75rem 0;
+    overflow: hidden;
+  }
+
+  .confidence-bar {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.8s ease;
+  }
+
+  .confidence-bar.low      { background: var(--low); }
+  .confidence-bar.moderate { background: var(--moderate); }
+  .confidence-bar.high     { background: var(--high); }
+
+  .sensor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+
+  .sensor-item {
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .sensor-label {
+    font-size: 0.65rem;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.2rem;
+  }
+
+  .sensor-value {
+    font-size: 1rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--accent);
+  }
+
+  .sensor-unit {
+    font-size: 0.65rem;
+    color: var(--muted);
+    margin-left: 0.2rem;
+  }
+
+  .last-updated {
+    font-size: 0.65rem;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    margin-top: 0.75rem;
+  }
+
+  /* ── CHARTS ── */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  @media (max-width: 900px) {
+    .charts-grid { grid-template-columns: 1fr; }
+  }
+
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+  }
+
+  .chart-title {
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 1rem;
+  }
+
+  .chart-wrap {
+    position: relative;
+    height: 200px;
+  }
+
+  /* ── HISTORY TABLE ── */
+  .table-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+    overflow-x: auto;
+  }
+
+  .table-title {
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 1rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+  }
+
+  th {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 400;
+  }
+
+  td {
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+
+  .risk-pill {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .pill-low      { background: rgba(34,197,94,0.15);  color: var(--low); }
+  .pill-moderate { background: rgba(245,158,11,0.15); color: var(--moderate); }
+  .pill-high     { background: rgba(239,68,68,0.15);  color: var(--high); }
+
+  .device-pill {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.6rem;
+    background: var(--surface2);
+    color: var(--accent);
+    border: 1px solid var(--border);
+  }
+
+  /* ── STAT ROW ── */
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+  }
+
+  .stat-label {
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.4rem;
+  }
+
+  .stat-value {
+    font-size: 1.6rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text);
+  }
+
+  .stat-sub {
+    font-size: 0.65rem;
+    color: var(--muted);
+    margin-top: 0.2rem;
+  }
+
+  /* ── LOADING ── */
+  .loading {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    text-align: center;
+    padding: 2rem;
+  }
+</style>
 </head>
 <body>
 
-<h2>Live Flood Probability</h2>
-<canvas id="chart"></canvas>
+<header>
+  <a class="logo" href="/">FLOOD<span>GUIDE</span></a>
+  <div class="header-right">
+    <div class="live-badge">
+      <div class="live-dot"></div>
+      LIVE
+    </div>
+    <a class="nav-link" href="/">Map View</a>
+    <a class="nav-link" href="/dashboard">Dashboard</a>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="page-title">Real-Time Flood Risk Dashboard — Mandaue City</div>
+
+  <!-- RISK CARDS -->
+  <div class="risk-grid" id="riskCards">
+    <div class="loading">Loading sensor data...</div>
+  </div>
+
+  <!-- SUMMARY STATS -->
+  <div class="stat-row" id="statRow">
+    <div class="stat-card">
+      <div class="stat-label">Total readings</div>
+      <div class="stat-value" id="statTotal">—</div>
+      <div class="stat-sub">in database</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">High risk events</div>
+      <div class="stat-value" style="color:var(--high)" id="statHigh">—</div>
+      <div class="stat-sub">flooded = 2</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Moderate events</div>
+      <div class="stat-value" style="color:var(--moderate)" id="statMod">—</div>
+      <div class="stat-sub">flooded = 1</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Avg water level</div>
+      <div class="stat-value" id="statWL">—</div>
+      <div class="stat-sub">cm (bridge1)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Max rainfall</div>
+      <div class="stat-value" id="statRain">—</div>
+      <div class="stat-sub">mm (all time)</div>
+    </div>
+  </div>
+
+  <!-- CHARTS -->
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-title">Water level — last 20 readings (bridge1)</div>
+      <div class="chart-wrap">
+        <canvas id="chartWL"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Rainfall — last 20 readings (bridge1)</div>
+      <div class="chart-wrap">
+        <canvas id="chartRain"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Water level — last 20 readings (bridge2)</div>
+      <div class="chart-wrap">
+        <canvas id="chartWL2"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Flood risk distribution</div>
+      <div class="chart-wrap">
+        <canvas id="chartDist"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- HISTORY TABLE -->
+  <div class="table-card">
+    <div class="table-title">Recent sensor readings</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Device</th>
+          <th>Rainfall</th>
+          <th>Water Level</th>
+          <th>Flow Rate</th>
+          <th>Flood Risk</th>
+        </tr>
+      </thead>
+      <tbody id="historyBody">
+        <tr><td colspan="6" class="loading">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
 
 <script>
-const ctx = document.getElementById('chart');
-const chart = new Chart(ctx, {
+const REFRESH_MS = 30000; // refresh every 30 seconds
+
+// Chart defaults
+Chart.defaults.color = '#64748b';
+Chart.defaults.borderColor = '#1f2d45';
+Chart.defaults.font.family = "'Space Mono', monospace";
+Chart.defaults.font.size = 11;
+
+function mkLineChart(id, label, color) {
+  return new Chart(document.getElementById(id), {
     type: 'line',
     data: {
-        labels: [],
-        datasets: [{
-            label: 'Flood Probability',
-            data: [],
-            borderColor: 'red'
-        }]
+      labels: [],
+      datasets: [{
+        label,
+        data: [],
+        borderColor: color,
+        backgroundColor: color + '18',
+        borderWidth: 1.5,
+        pointRadius: 3,
+        pointBackgroundColor: color,
+        fill: true,
+        tension: 0.3
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: '#1f2d45' }, ticks: { maxTicksLimit: 6, maxRotation: 0 } },
+        y: { grid: { color: '#1f2d45' }, beginAtZero: true }
+      }
     }
-});
-
-function updateChart() {
-    fetch('/api/live-data')
-    .then(res => res.json())
-    .then(data => {
-
-        chart.data.labels.push(data.Timestamp);
-        chart.data.datasets[0].data.push(data.FloodProbability);
-
-        if (chart.data.labels.length > 20) {
-            chart.data.labels.shift();
-            chart.data.datasets[0].data.shift();
-        }
-
-        chart.update();
-    });
+  });
 }
 
-setInterval(updateChart, 5000);
-</script>
+const chartWL   = mkLineChart('chartWL',   'Water Level (cm)', '#38bdf8');
+const chartRain = mkLineChart('chartRain', 'Rainfall (mm)',    '#818cf8');
+const chartWL2  = mkLineChart('chartWL2',  'Water Level (cm)', '#34d399');
 
+const chartDist = new Chart(document.getElementById('chartDist'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Low', 'Moderate', 'High'],
+    datasets: [{
+      data: [0, 0, 0],
+      backgroundColor: ['#22c55e', '#f59e0b', '#ef4444'],
+      borderColor: '#111827',
+      borderWidth: 3
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { padding: 16, usePointStyle: true, pointStyleWidth: 8 }
+      }
+    },
+    cutout: '65%'
+  }
+});
+
+function riskClass(f) {
+  if (f >= 2) return 'high';
+  if (f >= 1) return 'moderate';
+  return 'low';
+}
+
+function riskLabel(f) {
+  if (f >= 2) return 'High';
+  if (f >= 1) return 'Moderate';
+  return 'Low';
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleString('en-PH', { month:'short', day:'numeric',
+    hour:'2-digit', minute:'2-digit' });
+}
+
+async function loadDashboard() {
+  try {
+    // Fetch map data for current risk
+    const mapRes  = await fetch('/api/map-data');
+    const mapData = await mapRes.json();
+
+    // Fetch historical data
+    const histRes  = await fetch('/api/dashboard-data');
+    const histData = await histRes.json();
+
+    // ── RISK CARDS ──
+    const cardsHtml = mapData.locations.map(loc => {
+      const rc = riskClass(loc.risk_level || 0);
+      return `
+      <div class="risk-card ${rc}">
+        <div class="bridge-name">${loc.id === 'bridge1' ? 'Mandaue-Mactan Bridge 1' : 'Marcelo Fernan Bridge'}</div>
+        <div class="risk-label ${rc}">${loc.risk || 'Low'} Risk</div>
+        <div class="confidence-bar-wrap">
+          <div class="confidence-bar ${rc}" style="width:${loc.confidence||85}%"></div>
+        </div>
+        <div class="sensor-grid">
+          <div class="sensor-item">
+            <div class="sensor-label">Rainfall</div>
+            <div class="sensor-value">${(loc.rainfall||0).toFixed(2)}<span class="sensor-unit">mm</span></div>
+          </div>
+          <div class="sensor-item">
+            <div class="sensor-label">Water Level</div>
+            <div class="sensor-value">${(loc.water_level||0).toFixed(2)}<span class="sensor-unit">cm</span></div>
+          </div>
+          <div class="sensor-item">
+            <div class="sensor-label">Flow Rate</div>
+            <div class="sensor-value">${(loc.flow_rate||0).toFixed(2)}<span class="sensor-unit">L</span></div>
+          </div>
+          <div class="sensor-item">
+            <div class="sensor-label">Rise Rate</div>
+            <div class="sensor-value">${(loc.rise_rate||0).toFixed(2)}<span class="sensor-unit">cm</span></div>
+          </div>
+        </div>
+        <div class="last-updated">Updated: ${new Date().toLocaleTimeString('en-PH')}</div>
+      </div>`;
+    }).join('');
+    document.getElementById('riskCards').innerHTML = cardsHtml;
+
+    // ── STATS ──
+    if (histData.stats) {
+      const s = histData.stats;
+      document.getElementById('statTotal').textContent = s.total || 0;
+      document.getElementById('statHigh').textContent  = s.high  || 0;
+      document.getElementById('statMod').textContent   = s.moderate || 0;
+      document.getElementById('statWL').textContent    = s.avg_water_level ? s.avg_water_level.toFixed(1) : '—';
+      document.getElementById('statRain').textContent  = s.max_rain ? s.max_rain.toFixed(1) : '—';
+    }
+
+    // ── CHARTS ──
+    if (histData.bridge1 && histData.bridge1.length > 0) {
+      const b1     = histData.bridge1.slice(-20);
+      const labels = b1.map(r => fmtTime(r.timestamp));
+      chartWL.data.labels   = labels;
+      chartWL.data.datasets[0].data = b1.map(r => r.water_level || 0);
+      chartWL.update();
+      chartRain.data.labels = labels;
+      chartRain.data.datasets[0].data = b1.map(r => r.total_rain || 0);
+      chartRain.update();
+    }
+
+    if (histData.bridge2 && histData.bridge2.length > 0) {
+      const b2 = histData.bridge2.slice(-20);
+      chartWL2.data.labels = b2.map(r => fmtTime(r.timestamp));
+      chartWL2.data.datasets[0].data = b2.map(r => r.water_level || 0);
+      chartWL2.update();
+    }
+
+    if (histData.stats) {
+      const s = histData.stats;
+      const low = (s.total||0) - (s.high||0) - (s.moderate||0);
+      chartDist.data.datasets[0].data = [Math.max(low,0), s.moderate||0, s.high||0];
+      chartDist.update();
+    }
+
+    // ── HISTORY TABLE ──
+    if (histData.recent && histData.recent.length > 0) {
+      const rows = histData.recent.map(r => {
+        const rc = riskClass(r.flooded);
+        return `<tr>
+          <td>${fmtTime(r.timestamp)}</td>
+          <td><span class="device-pill">${r.device_id||'bridge1'}</span></td>
+          <td>${(r.total_rain||0).toFixed(2)} mm</td>
+          <td>${(r.water_level||0).toFixed(2)} cm</td>
+          <td>${(r.flow_rate||0).toFixed(2)} L</td>
+          <td><span class="risk-pill pill-${rc}">${riskLabel(r.flooded)}</span></td>
+        </tr>`;
+      }).join('');
+      document.getElementById('historyBody').innerHTML = rows;
+    }
+
+  } catch (err) {
+    console.error('Dashboard error:', err);
+    document.getElementById('riskCards').innerHTML =
+      `<div class="loading">Error loading data — ${err.message}</div>`;
+  }
+}
+
+loadDashboard();
+setInterval(loadDashboard, REFRESH_MS);
+</script>
 </body>
 </html>
