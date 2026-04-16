@@ -1,75 +1,586 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>FloodGuide – Real-Time Flood Risk Map</title>
+  <title>FloodGuide – Real-Time Flood Risk Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-        }
+    body, html {
+      height: 100%;
+      font-family: 'Inter', 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      overflow: hidden;
+    }
 
-        h2 {
-            margin: 10px;
-        }
+    /* ── TOP NAV ── */
+    .topbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 56px;
+      background: #1e293bef;
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid #334155;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 1.25rem;
+      z-index: 9999;
+    }
 
-        #map {
-            height: calc(100% - 60px);
-            width: 100%;
-        }
+    .topbar-left { display: flex; align-items: center; gap: 0.75rem; }
 
-        /* LEGEND STYLE */
-        #legend {
-            position: fixed;
-            bottom: 30px;
-            left: 30px;
-            background: white;
-            padding: 12px;
-            border: 2px solid #666;
-            border-radius: 6px;
-            font-size: 14px;
-            z-index: 9999;
-            box-shadow: 0 0 10px rgba(0,0,0,0.2);
-        }
+    .logo { font-size: 1.05rem; font-weight: 700; color: #38bdf8; letter-spacing: 0.05em; }
+    .logo span { color: #64748b; font-weight: 400; }
 
-        .legend-item {
-            margin-bottom: 6px;
-        }
+    .live-indicator {
+      display: flex; align-items: center; gap: 0.35rem;
+      font-size: 0.65rem; font-weight: 600;
+      color: #22c55e; letter-spacing: 0.08em; text-transform: uppercase;
+    }
 
-        .legend-color {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            margin-right: 6px;
-            vertical-align: middle;
-        }
-    </style>
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #22c55e; animation: blink 2s infinite;
+    }
+
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+    .topbar-right { display: flex; align-items: center; gap: 0.4rem; }
+
+    .nav-btn {
+      display: flex; align-items: center; gap: 0.35rem;
+      padding: 0.38rem 0.85rem; border-radius: 7px;
+      font-size: 0.78rem; font-weight: 500;
+      text-decoration: none; border: 1px solid #334155;
+      background: transparent; color: #94a3b8;
+      cursor: pointer; transition: all 0.18s;
+      white-space: nowrap; font-family: inherit;
+    }
+
+    .nav-btn:hover { background: #1e293b; color: #e2e8f0; border-color: #475569; }
+    .nav-btn.active { background: #38bdf820; border-color: #38bdf860; color: #38bdf8; }
+    .nav-btn.btn-route { background: #f59e0b20; border-color: #f59e0b60; color: #f59e0b; }
+    .nav-btn.btn-route:hover { background: #f59e0b35; }
+
+    .ml-badge {
+      display: flex; align-items: center; gap: 0.35rem;
+      padding: 0.38rem 0.85rem; border-radius: 7px;
+      font-size: 0.72rem; font-weight: 600; border: 1px solid;
+      cursor: pointer; transition: all 0.18s; white-space: nowrap;
+    }
+
+    .ml-active   { background:#22c55e18; border-color:#22c55e50; color:#22c55e; }
+    .ml-fallback { background:#f59e0b18; border-color:#f59e0b50; color:#f59e0b; }
+
+    /* ── MAP ── */
+    #map { position: fixed; top: 56px; left: 0; right: 0; bottom: 0; }
+
+    /* ── SIDE PANELS ── */
+    .side-panel {
+      position: fixed; top: 56px; right: 0;
+      width: 300px; height: calc(100vh - 56px);
+      background: #1e293bef; backdrop-filter: blur(12px);
+      border-left: 1px solid #334155;
+      padding: 1.25rem; overflow-y: auto;
+      z-index: 9998;
+      transform: translateX(100%);
+      transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    .side-panel.open { transform: translateX(0); }
+
+    .panel-header {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 1.1rem;
+    }
+
+    .panel-title {
+      font-size: 0.72rem; font-weight: 600;
+      color: #64748b; text-transform: uppercase; letter-spacing: 0.08em;
+    }
+
+    .panel-close {
+      cursor: pointer; color: #475569;
+      font-size: 1.1rem; line-height: 1; transition: color 0.15s;
+    }
+
+    .panel-close:hover { color: #e2e8f0; }
+
+    /* ── THRESHOLD PANEL ── */
+    .thresh-section-title {
+      font-size: 0.62rem; font-weight: 600; color: #475569;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      margin: 0.85rem 0 0.4rem;
+    }
+
+    .thresh-row {
+      display: flex; justify-content: space-between;
+      align-items: center; padding: 0.45rem 0;
+      border-bottom: 1px solid #ffffff08;
+    }
+
+    .thresh-row:last-of-type { border-bottom: none; }
+    .thresh-label { font-size: 0.75rem; color: #94a3b8; }
+
+    .chip {
+      display: inline-block; padding: 0.12rem 0.55rem;
+      border-radius: 5px; font-size: 0.65rem; font-weight: 700;
+    }
+
+    .chip-low      { background:#22c55e20; color:#22c55e; }
+    .chip-moderate { background:#f59e0b20; color:#f59e0b; }
+    .chip-high     { background:#ef444420; color:#ef4444; }
+
+    .thresh-source {
+      margin-top: 1rem; padding: 0.6rem 0.75rem;
+      background: #0f172a; border-radius: 7px;
+      font-size: 0.65rem; color: #475569; line-height: 1.55;
+    }
+
+    /* ── ML PANEL ── */
+    .ml-status-row {
+      display: flex; gap: 0.75rem; align-items: flex-start;
+      margin-bottom: 1rem; padding: 0.75rem;
+      background: #0f172a; border-radius: 8px;
+    }
+
+    .ml-icon { font-size: 1.5rem; line-height: 1; }
+    .ml-status-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.15rem; }
+    .ml-status-sub   { font-size: 0.68rem; color: #64748b; }
+
+    .ml-row {
+      display: flex; justify-content: space-between;
+      padding: 0.45rem 0; border-bottom: 1px solid #ffffff08;
+      font-size: 0.75rem;
+    }
+
+    .ml-row:last-child { border-bottom: none; }
+    .ml-key   { color: #64748b; }
+    .ml-value { color: #e2e8f0; font-weight: 500; }
+
+    .feat-label-row {
+      display: flex; justify-content: space-between;
+      font-size: 0.68rem; margin-bottom: 0.2rem;
+    }
+
+    .feat-key { color: #94a3b8; }
+    .feat-pct { color: #38bdf8; font-weight: 600; }
+
+    .feat-bar-bg {
+      height: 4px; background: #1e3a5f;
+      border-radius: 4px; margin-bottom: 0.5rem; overflow: hidden;
+    }
+
+    .feat-bar-fill {
+      height: 100%; border-radius: 4px;
+      background: linear-gradient(90deg, #38bdf8, #818cf8);
+    }
+
+    /* ── SAFE ROUTES PANEL ── */
+    .route-intro {
+      font-size: 0.75rem; color: #94a3b8;
+      line-height: 1.6; margin-bottom: 1rem;
+    }
+
+    .route-select-label {
+      font-size: 0.65rem; font-weight: 600; color: #64748b;
+      text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 0.35rem;
+    }
+
+    .route-select {
+      width: 100%; background: #0f172a; border: 1px solid #334155;
+      border-radius: 7px; color: #e2e8f0;
+      padding: 0.55rem 0.75rem; font-size: 0.78rem;
+      margin-bottom: 0.75rem; outline: none; font-family: inherit;
+    }
+
+    .route-select:focus { border-color: #38bdf8; }
+
+    .route-btn {
+      width: 100%; padding: 0.6rem; background: #38bdf8;
+      color: #0f172a; border: none; border-radius: 7px;
+      font-size: 0.82rem; font-weight: 700;
+      cursor: pointer; transition: opacity 0.18s;
+      font-family: inherit; margin-bottom: 1rem;
+    }
+
+    .route-btn:hover { opacity: 0.88; }
+
+    .route-card {
+      background: #0f172a; border-radius: 8px;
+      padding: 0.85rem; margin-bottom: 0.6rem;
+      border-left: 3px solid #22c55e;
+    }
+
+    .route-card.warning { border-left-color: #f59e0b; }
+    .route-card.danger  { border-left-color: #ef4444; }
+
+    .route-rank {
+      font-size: 0.6rem; color: #64748b;
+      margin-bottom: 0.25rem;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+
+    .route-name { font-size: 0.82rem; font-weight: 600; margin-bottom: 0.3rem; }
+    .route-desc { font-size: 0.7rem; color: #94a3b8; line-height: 1.5; }
+
+    .route-status {
+      display: inline-block; font-size: 0.6rem; font-weight: 700;
+      padding: 0.1rem 0.45rem; border-radius: 4px; margin-top: 0.4rem;
+    }
+
+    .status-safe    { background:#22c55e20; color:#22c55e; }
+    .status-caution { background:#f59e0b20; color:#f59e0b; }
+    .status-avoid   { background:#ef444420; color:#ef4444; }
+
+    .route-empty {
+      text-align: center; padding: 2rem 0;
+      color: #475569; font-size: 0.78rem;
+    }
+
+    /* ── LEGEND ── */
+    #legend {
+      position: fixed; bottom: 2rem; left: 1rem;
+      background: #1e293bed; backdrop-filter: blur(8px);
+      padding: 0.85rem 1rem; border: 1px solid #334155;
+      border-radius: 10px; font-size: 0.78rem;
+      z-index: 9997;
+    }
+
+    .legend-title {
+      font-size: 0.62rem; font-weight: 600; color: #64748b;
+      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.5rem;
+    }
+
+    .legend-item {
+      display: flex; align-items: center;
+      gap: 0.5rem; margin-bottom: 0.3rem; color: #cbd5e1;
+    }
+
+    .legend-item:last-child { margin-bottom: 0; }
+
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    /* Leaflet dark popup */
+    .leaflet-popup-content-wrapper {
+      background: #1e293b !important; border: 1px solid #334155 !important;
+      border-radius: 10px !important; box-shadow: 0 8px 32px #00000080 !important;
+      color: #e2e8f0 !important;
+    }
+
+    .leaflet-popup-tip { background: #1e293b !important; }
+    .leaflet-popup-close-button { color: #64748b !important; top: 8px !important; right: 8px !important; }
+    .leaflet-popup-content { margin: 14px 16px !important; }
+  </style>
 </head>
-
 <body>
 
-<h2>FloodGuide – Real-Time Flood Risk Map</h2>
-<div id="map"></div>
+<!-- ── TOP NAV ── -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="logo">FLOOD<span>GUIDE</span></div>
+    <div class="live-indicator">
+      <div class="live-dot"></div>
+      Live
+    </div>
+  </div>
 
-<!-- LEGEND -->
-<div id="legend">
-    <b>Flood Risk Levels</b><br><br>
-    <div class="legend-item">
-        <span class="legend-color" style="background:green;"></span> Low Risk
+  <div class="topbar-right">
+    <a href="/" class="nav-btn active">🗺 Map</a>
+    <a href="/dashboard" class="nav-btn">📊 Dashboard</a>
+    <button class="nav-btn btn-route" onclick="togglePanel('routePanel')">🛣 Safe Routes</button>
+    <button class="nav-btn" onclick="togglePanel('threshPanel')">⚠️ Thresholds</button>
+    <div class="ml-badge ml-active" id="mlBadge" onclick="togglePanel('mlPanel')">
+      🌲 <span id="mlBadgeText">Random Forest</span>
     </div>
-    <div class="legend-item">
-        <span class="legend-color" style="background:orange;"></span> Moderate Risk
-    </div>
-    <div class="legend-item">
-        <span class="legend-color" style="background:red;"></span> High Risk
-    </div>
+  </div>
 </div>
 
+<!-- ── MAP ── -->
+<div id="map"></div>
+
+<!-- ── LEGEND ── -->
+<div id="legend">
+  <div class="legend-title">Flood Risk Levels</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Low Risk</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> Moderate Risk</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div> High Risk</div>
+</div>
+
+<!-- ── THRESHOLD PANEL ── -->
+<div class="side-panel" id="threshPanel">
+  <div class="panel-header">
+    <div class="panel-title">Flood Thresholds</div>
+    <span class="panel-close" onclick="closePanel('threshPanel')">✕</span>
+  </div>
+
+  <div class="thresh-section-title">Water Level (cm)</div>
+  <div class="thresh-row"><span class="thresh-label">Low risk</span><span class="chip chip-low">&lt; 80 cm</span></div>
+  <div class="thresh-row"><span class="thresh-label">Moderate risk</span><span class="chip chip-moderate">80 – 150 cm</span></div>
+  <div class="thresh-row"><span class="thresh-label">High risk</span><span class="chip chip-high">&gt; 150 cm</span></div>
+
+  <div class="thresh-section-title">Rainfall — 3-hour Accumulation</div>
+  <div class="thresh-row"><span class="thresh-label">Low risk</span><span class="chip chip-low">&lt; 30 mm</span></div>
+  <div class="thresh-row"><span class="thresh-label">Moderate risk</span><span class="chip chip-moderate">30 – 60 mm</span></div>
+  <div class="thresh-row"><span class="thresh-label">High risk</span><span class="chip chip-high">&gt; 60 mm</span></div>
+
+  <div class="thresh-section-title">Flow Rate</div>
+  <div class="thresh-row"><span class="thresh-label">Moderate trigger</span><span class="chip chip-moderate">&gt; 3.0 L</span></div>
+
+  <div class="thresh-section-title">Rise Rate (cm/reading)</div>
+  <div class="thresh-row"><span class="thresh-label">High trigger</span><span class="chip chip-high">&gt; 10 cm + WL &gt; 100</span></div>
+
+  <div class="thresh-source">
+    Based on PAGASA rainfall warning thresholds and Mandaue City flood guidelines.
+    ML model trained on 2020–2024 Mactan Station data from DOST-PAGASA.
+  </div>
+</div>
+
+<!-- ── ML MODEL PANEL ── -->
+<div class="side-panel" id="mlPanel">
+  <div class="panel-header">
+    <div class="panel-title">Prediction Model</div>
+    <span class="panel-close" onclick="closePanel('mlPanel')">✕</span>
+  </div>
+
+  <div class="ml-status-row">
+    <div class="ml-icon">🌲</div>
+    <div>
+      <div class="ml-status-title" id="mlStatusTitle" style="color:#22c55e">Random Forest Active</div>
+      <div class="ml-status-sub" id="mlStatusSub">ML model loaded and predicting</div>
+    </div>
+  </div>
+
+  <div class="ml-row"><span class="ml-key">Algorithm</span><span class="ml-value">Random Forest Classifier</span></div>
+  <div class="ml-row"><span class="ml-key">Number of trees</span><span class="ml-value">300 estimators</span></div>
+  <div class="ml-row"><span class="ml-key">Max depth</span><span class="ml-value">10 levels</span></div>
+  <div class="ml-row"><span class="ml-key">Training data</span><span class="ml-value">PAGASA 2020–2024</span></div>
+  <div class="ml-row"><span class="ml-key">Training samples</span><span class="ml-value">1,461 daily records</span></div>
+  <div class="ml-row"><span class="ml-key">Model accuracy</span><span class="ml-value" style="color:#22c55e">99%</span></div>
+  <div class="ml-row"><span class="ml-key">Output classes</span><span class="ml-value">Low / Moderate / High</span></div>
+  <div class="ml-row"><span class="ml-key">Fallback mode</span><span class="ml-value">Rule-based thresholds</span></div>
+  <div class="ml-row"><span class="ml-key">Current mode</span><span class="ml-value" id="mlCurrentMode" style="color:#22c55e">ML Model</span></div>
+
+  <div class="thresh-section-title" style="margin-top:1rem">Feature Importances</div>
+
+  <div class="feat-label-row"><span class="feat-key">rain_3h</span><span class="feat-pct">62.9%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:62.9%"></div></div>
+
+  <div class="feat-label-row"><span class="feat-key">total_rain</span><span class="feat-pct">33.4%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:33.4%"></div></div>
+
+  <div class="feat-label-row"><span class="feat-key">month</span><span class="feat-pct">3.8%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:3.8%"></div></div>
+
+  <div class="feat-label-row"><span class="feat-key">water_level</span><span class="feat-pct">0%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:0%"></div></div>
+
+  <div class="feat-label-row"><span class="feat-key">flow_rate</span><span class="feat-pct">0%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:0%"></div></div>
+</div>
+
+<!-- ── SAFE ROUTES PANEL ── -->
+<div class="side-panel" id="routePanel">
+  <div class="panel-header">
+    <div class="panel-title">Safe Route Recommendations</div>
+    <span class="panel-close" onclick="closePanel('routePanel')">✕</span>
+  </div>
+
+  <p class="route-intro">
+    Based on current flood risk at both bridges, FloodGuide recommends the safest
+    crossing routes for Mandaue–Mactan. Updated every 30 minutes from live sensor data.
+  </p>
+
+  <div class="route-select-label">Your Location</div>
+  <select class="route-select" id="routeOrigin">
+    <option value="mandaue">Mandaue City Side</option>
+    <option value="mactan">Mactan / Lapu-Lapu Side</option>
+  </select>
+
+  <button class="route-btn" onclick="getRouteRecommendations()">
+    🔍 Get Safe Route Recommendations
+  </button>
+
+  <div id="routeResults">
+    <div class="route-empty">Select your location and tap the button above.</div>
+  </div>
+</div>
+
+<!-- ── SCRIPTS ── -->
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script src="{{ url_for('static', filename='js/map.js') }}"></script>
 
+<script>
+// ── PANEL SYSTEM ──
+const PANELS = ['threshPanel', 'mlPanel', 'routePanel'];
+
+function togglePanel(id) {
+  const isOpen = document.getElementById(id).classList.contains('open');
+  PANELS.forEach(p => document.getElementById(p).classList.remove('open'));
+  if (!isOpen) document.getElementById(id).classList.add('open');
+}
+
+function closePanel(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+// ── ML BADGE ──
+function updateMlBadge(isML) {
+  const badge = document.getElementById('mlBadge');
+  const text  = document.getElementById('mlBadgeText');
+  const mode  = document.getElementById('mlCurrentMode');
+  const title = document.getElementById('mlStatusTitle');
+  const sub   = document.getElementById('mlStatusSub');
+
+  if (isML) {
+    badge.className = 'ml-badge ml-active';
+    text.textContent  = 'Random Forest';
+    mode.textContent  = 'ML Model';
+    mode.style.color  = '#22c55e';
+    title.textContent = 'Random Forest Active';
+    title.style.color = '#22c55e';
+    sub.textContent   = 'ML model loaded and predicting';
+  } else {
+    badge.className = 'ml-badge ml-fallback';
+    text.textContent  = 'Rule-Based';
+    mode.textContent  = 'Fallback Rules';
+    mode.style.color  = '#f59e0b';
+    title.textContent = 'Rule-Based Fallback';
+    title.style.color = '#f59e0b';
+    sub.textContent   = 'ML model not loaded — using threshold rules';
+  }
+}
+
+// ── SAFE ROUTES ──
+const ROUTES = {
+  mandaue: [
+    {
+      name: "Mandaue-Mactan Bridge 1 (Old Bridge)",
+      desc: "Via M.L. Quezon Highway → Osmena St → Bridge 1 → Mactan. Most direct route from Mandaue City proper.",
+      bridge: "bridge1"
+    },
+    {
+      name: "Marcelo Fernan Bridge (Bridge 2)",
+      desc: "Via N. Bacalso Ave → Bridge 2 → Lapu-Lapu City. Alternative if Bridge 1 area is at risk.",
+      bridge: "bridge2"
+    },
+    {
+      name: "Via Consolacion — Ferry (Emergency)",
+      desc: "Mandaue → Consolacion → Compostela → Danao Port → Ferry to Mactan. Only if both bridges are flooded.",
+      bridge: null,
+      alwaysSafe: true
+    }
+  ],
+  mactan: [
+    {
+      name: "Marcelo Fernan Bridge (Bridge 2)",
+      desc: "From Lapu-Lapu City via M.L. Quezon Hwy → Bridge 2 → Mandaue. Recommended first option.",
+      bridge: "bridge2"
+    },
+    {
+      name: "Mandaue-Mactan Bridge 1 (Old Bridge)",
+      desc: "Via Mactan Shrine Road → Bridge 1 → Mandaue City. Alternative route.",
+      bridge: "bridge1"
+    },
+    {
+      name: "Mactan-Cebu Ferry (Emergency)",
+      desc: "Lapu-Lapu Port → Pier 1 Cebu City. Use only if both bridges are impassable.",
+      bridge: null,
+      alwaysSafe: true
+    }
+  ]
+};
+
+let currentRiskData = {};
+
+async function fetchRiskLevels() {
+  try {
+    const res  = await fetch('/api/map-data');
+    const data = await res.json();
+    currentRiskData = {};
+    data.locations.forEach(loc => {
+      currentRiskData[loc.id] = loc.risk_color;
+    });
+
+    // Detect ML vs rule-based
+    const hasML = data.locations.some(loc => {
+      const m = (loc.popup_html || '').match(/Confidence.*?([\d.]+)%/);
+      const conf = parseFloat(m ? m[1] : '85');
+      return conf !== 85.0 && conf !== 75.0 && conf !== 90.0;
+    });
+    updateMlBadge(hasML);
+
+  } catch(e) {
+    console.warn('Risk fetch error:', e);
+  }
+}
+
+function riskLevel(color) {
+  if (color === 'red')    return 2;
+  if (color === 'orange') return 1;
+  return 0;
+}
+
+function getRouteRecommendations() {
+  const origin  = document.getElementById('routeOrigin').value;
+  const routes  = ROUTES[origin];
+  const results = document.getElementById('routeResults');
+  const ranks   = ['1st choice', '2nd choice', 'Emergency only'];
+  let html = '';
+
+  routes.forEach((route, i) => {
+    let statusClass = 'status-safe';
+    let statusLabel = 'SAFE TO USE';
+    let cardClass   = '';
+
+    if (route.alwaysSafe) {
+      statusClass = 'status-caution';
+      statusLabel = 'LAST RESORT';
+      cardClass   = 'warning';
+    } else {
+      const rl = riskLevel(currentRiskData[route.bridge] || 'green');
+      if (rl === 2) {
+        statusClass = 'status-avoid'; statusLabel = 'AVOID — FLOODED'; cardClass = 'danger';
+      } else if (rl === 1) {
+        statusClass = 'status-caution'; statusLabel = 'USE WITH CAUTION'; cardClass = 'warning';
+      }
+    }
+
+    html += `
+    <div class="route-card ${cardClass}">
+      <div class="route-rank">${ranks[i]}</div>
+      <div class="route-name">${route.name}</div>
+      <div class="route-desc">${route.desc}</div>
+      <span class="route-status ${statusClass}">${statusLabel}</span>
+    </div>`;
+  });
+
+  // Overall advice banner
+  const b1 = riskLevel(currentRiskData['bridge1'] || 'green');
+  const b2 = riskLevel(currentRiskData['bridge2'] || 'green');
+
+  if (b1 === 2 && b2 === 2) {
+    html += `<div class="route-card danger" style="margin-top:0.5rem">
+      <div class="route-name" style="color:#ef4444">⚠️ Both Bridges — High Risk</div>
+      <div class="route-desc">Both bridges are currently High flood risk. Do not attempt to cross. Use ferry or wait for conditions to improve.</div>
+    </div>`;
+  } else if (b1 === 0 && b2 === 0) {
+    html += `<div class="route-card" style="margin-top:0.5rem">
+      <div class="route-name" style="color:#22c55e">✅ Conditions Clear</div>
+      <div class="route-desc">Both bridges are currently safe. Conditions are updated every 30 minutes.</div>
+    </div>`;
+  }
+
+  results.innerHTML = html;
+}
+
+// Init
+fetchRiskLevels();
+setInterval(fetchRiskLevels, 30000);
+</script>
 </body>
 </html>
