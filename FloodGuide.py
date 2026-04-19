@@ -30,7 +30,7 @@ def get_db_connection():
 API_KEY    = "e2a8ee9c6e8ec237763497022a1309bb"
 MODEL_PATH = "model_class.pkl"
 
-# Separate in-memory state for EACH bridge
+# Separate in-memory state for each bridge
 latest_sensor_data = {
     "bridge1": {
         "water_level": 0.0,
@@ -112,6 +112,50 @@ def get_recent_readings(device_id, n=6):
         return []
 
 # =========================================
+# GET WEATHER FORECAST FROM OPENWEATHERMAP
+# Returns: temp, humidity, next 3h rain,
+#          next 6h rain (2 forecast periods)
+# =========================================
+def get_weather_data(lat, lng):
+    result = {
+        "temp":           28.0,
+        "humidity":       70,
+        "forecast_3h":    0.0,   # predicted rain in next 3 hours
+        "forecast_6h":    0.0,   # predicted rain in next 6 hours
+    }
+    try:
+        # Current weather
+        url_now = (
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?lat={lat}&lon={lng}&appid={API_KEY}&units=metric"
+        )
+        r = requests.get(url_now, timeout=5).json()
+        result["temp"]     = r["main"]["temp"]
+        result["humidity"] = r["main"]["humidity"]
+    except Exception:
+        pass
+
+    try:
+        # Forecast — next 6 hours (cnt=2 gives two 3-hour periods)
+        url_fc = (
+            f"https://api.openweathermap.org/data/2.5/forecast"
+            f"?lat={lat}&lon={lng}&appid={API_KEY}&units=metric&cnt=2"
+        )
+        fc = requests.get(url_fc, timeout=5).json()
+        periods = fc.get("list", [])
+        if len(periods) >= 1:
+            result["forecast_3h"] = periods[0].get("rain", {}).get("3h", 0.0)
+        if len(periods) >= 2:
+            result["forecast_6h"] = (
+                periods[0].get("rain", {}).get("3h", 0.0) +
+                periods[1].get("rain", {}).get("3h", 0.0)
+            )
+    except Exception:
+        pass
+
+    return result
+
+# =========================================
 # RULE-BASED FALLBACK PREDICTION
 # =========================================
 def rule_based_predict(sensor_data):
@@ -129,54 +173,139 @@ def rule_based_predict(sensor_data):
         return "Low",      "green",  90.0
 
 # =========================================
-# PREDICTION FUNCTION (per device)
+# CORE PREDICTION FUNCTION
+# Takes a feature dict, returns risk label
 # =========================================
-def ml_predict_from_sensor(device_id, clf):
-    sensor_data = latest_sensor_data[device_id].copy()
-    history     = get_recent_readings(device_id, 6)
+def run_prediction(features, clf):
+    """
+    features = {
+        total_rain, water_level, flow_rate,
+        rain_3h, rise_rate, month
+    }
+    Returns: (risk_label, color, confidence)
+    """
+    if clf is None:
+        return rule_based_predict({
+            "rainfall":    features["total_rain"],
+            "water_level": features["water_level"],
+            "flow_rate":   features["flow_rate"],
+            "rain_3h":     features["rain_3h"],
+            "rise_rate":   features["rise_rate"]
+        })
 
+    df = pd.DataFrame([features])
+    try:
+        pred          = clf.predict(df)[0]
+        probabilities = clf.predict_proba(df)[0]
+        confidence    = round(max(probabilities) * 100, 2)
+    except Exception as e:
+        print(f"⚠️ ML prediction error: {e} — rule-based fallback")
+        return rule_based_predict({
+            "rainfall":    features["total_rain"],
+            "water_level": features["water_level"],
+            "flow_rate":   features["flow_rate"],
+            "rain_3h":     features["rain_3h"],
+            "rise_rate":   features["rise_rate"]
+        })
+
+    if pred == 0:   return "Low",      "green",  confidence
+    elif pred == 1: return "Moderate", "orange", confidence
+    else:           return "High",     "red",    confidence
+
+# =========================================
+# PREDICTION ENGINE
+# Computes CURRENT risk + PREDICTED risk
+# (current + forecast rainfall scenario)
+# =========================================
+def get_predictions(device_id, forecast_3h, forecast_6h, clf):
+    sensor  = latest_sensor_data[device_id].copy()
+    history = get_recent_readings(device_id, 6)
+
+    # Compute rolling features from actual history
     if len(history) >= 2:
         rain_values  = [r["total_rain"]  for r in history]
         water_values = [r["water_level"] for r in history]
         rain_3h   = sum(rain_values[-3:]) if len(rain_values) >= 3 else sum(rain_values)
         rise_rate = water_values[-1] - water_values[-2]
     else:
-        rain_3h   = sensor_data["rainfall"]
+        rain_3h   = sensor["rainfall"]
         rise_rate = 0.0
 
-    sensor_data["rain_3h"]   = rain_3h
-    sensor_data["rise_rate"] = rise_rate
-
-    # Store back so popup can display them
+    # Store computed features for popup display
     latest_sensor_data[device_id]["rain_3h"]   = rain_3h
     latest_sensor_data[device_id]["rise_rate"] = rise_rate
 
-    if clf is None:
-        return rule_based_predict(sensor_data)
+    month = datetime.now().month
 
-    df = pd.DataFrame([{
-        "total_rain":  sensor_data["rainfall"],
-        "water_level": sensor_data["water_level"],
-        "flow_rate":   sensor_data["flow_rate"],
+    # ── CURRENT RISK ──
+    # Based on what sensors are reading right now
+    current_features = {
+        "total_rain":  sensor["rainfall"],
+        "water_level": sensor["water_level"],
+        "flow_rate":   sensor["flow_rate"],
         "rain_3h":     rain_3h,
         "rise_rate":   rise_rate,
-        "month":       datetime.now().month
-    }])
+        "month":       month
+    }
+    current_risk, current_color, current_conf = run_prediction(current_features, clf)
 
-    try:
-        pred          = clf.predict(df)[0]
-        probabilities = clf.predict_proba(df)[0]
-        confidence    = round(max(probabilities) * 100, 2)
-    except Exception as e:
-        print(f"⚠️ ML prediction error: {e} — using rule-based fallback")
-        return rule_based_predict(sensor_data)
+    # ── PREDICTED RISK (3 hours from now) ──
+    # Simulates what the sensor will look like in 3h
+    # by adding forecast rainfall to current accumulation.
+    # This is the actual prediction capability.
+    predicted_rain_3h = rain_3h + forecast_3h   # current accumulation + incoming rain
+    predicted_wl      = sensor["water_level"] + max(0, forecast_3h * 0.4)  # estimated rise
 
-    if pred == 0:
-        return "Low",      "green",  confidence
-    elif pred == 1:
-        return "Moderate", "orange", confidence
-    else:
-        return "High",     "red",    confidence
+    predicted_features = {
+        "total_rain":  sensor["rainfall"] + forecast_3h,
+        "water_level": predicted_wl,
+        "flow_rate":   sensor["flow_rate"],
+        "rain_3h":     predicted_rain_3h,
+        "rise_rate":   rise_rate + (forecast_3h * 0.1),
+        "month":       month
+    }
+    pred_risk, pred_color, pred_conf = run_prediction(predicted_features, clf)
+
+    # ── PREDICTED RISK (6 hours from now) ──
+    predicted_rain_6h = rain_3h + forecast_6h
+    predicted_wl_6h   = sensor["water_level"] + max(0, forecast_6h * 0.4)
+
+    predicted_features_6h = {
+        "total_rain":  sensor["rainfall"] + forecast_6h,
+        "water_level": predicted_wl_6h,
+        "flow_rate":   sensor["flow_rate"],
+        "rain_3h":     predicted_rain_6h,
+        "rise_rate":   rise_rate + (forecast_6h * 0.1),
+        "month":       month
+    }
+    pred_risk_6h, pred_color_6h, pred_conf_6h = run_prediction(predicted_features_6h, clf)
+
+    return {
+        "current_risk":  current_risk,
+        "current_color": current_color,
+        "current_conf":  current_conf,
+        "pred_risk_3h":  pred_risk,
+        "pred_color_3h": pred_color,
+        "pred_conf_3h":  pred_conf,
+        "pred_risk_6h":  pred_risk_6h,
+        "pred_color_6h": pred_color_6h,
+        "pred_conf_6h":  pred_conf_6h,
+        "rain_3h":       rain_3h,
+        "rise_rate":     rise_rate,
+        "forecast_3h":   forecast_3h,
+        "forecast_6h":   forecast_6h,
+    }
+
+# =========================================
+# TREND ARROW HELPER
+# =========================================
+def trend_arrow(current, predicted):
+    levels = {"Low": 0, "Moderate": 1, "High": 2}
+    c = levels.get(current, 0)
+    p = levels.get(predicted, 0)
+    if p > c:   return "↑ Rising",   "#ef4444"
+    elif p < c: return "↓ Improving","#22c55e"
+    else:       return "→ Stable",   "#94a3b8"
 
 # =========================================
 # AUTO-RETRAIN ENDPOINT
@@ -244,18 +373,14 @@ def receive_sensor():
     if not data:
         return jsonify({"error": "No JSON received"}), 400
 
-    # Read device_id from ESP32 payload
     device_id   = data.get("deviceId", "bridge1")
     water_level = float(data.get("waterLevel", 0))
     rainfall    = float(data.get("totalRain",  0))
     flow_rate   = float(data.get("flowRate",   0))
 
-    # Validate — only allow known devices
     if device_id not in latest_sensor_data:
-        print(f"⚠️ Unknown device_id: {device_id} — defaulting to bridge1")
         device_id = "bridge1"
 
-    # Update THIS bridge's in-memory state
     latest_sensor_data[device_id]["water_level"] = water_level
     latest_sensor_data[device_id]["rainfall"]    = rainfall
     latest_sensor_data[device_id]["flow_rate"]   = flow_rate
@@ -265,7 +390,6 @@ def receive_sensor():
     try:
         conn   = get_db_connection()
         cursor = conn.cursor()
-        # Save with device_id so each bridge's data is separate
         cursor.execute(
             "INSERT INTO sensor_readings (device_id, total_rain, water_level, flow_rate) "
             "VALUES (%s, %s, %s, %s)",
@@ -281,7 +405,6 @@ def receive_sensor():
         if cursor: cursor.close()
         if conn:   conn.close()
 
-    print(f"Received from ESP32 [{device_id}]:", data)
     return jsonify({"status": "received", "device": device_id})
 
 # =========================================
@@ -294,103 +417,118 @@ def map_data():
     clf       = load_model()
 
     for loc in MONITORED_SITES:
-        device_id = loc["id"]  # "bridge1" or "bridge2"
+        device_id = loc["id"]
 
-        # OpenWeatherMap: temperature, humidity, 3h forecast
-        temp             = 28
-        humidity         = 70
-        forecast_rain_3h = 0.0
+        # Get weather: temp, humidity, forecast rain
+        weather      = get_weather_data(loc["lat"], loc["lng"])
+        temp         = weather["temp"]
+        humidity     = weather["humidity"]
+        forecast_3h  = weather["forecast_3h"]
+        forecast_6h  = weather["forecast_6h"]
 
-        try:
-            url_weather = (
-                f"https://api.openweathermap.org/data/2.5/weather"
-                f"?lat={loc['lat']}&lon={loc['lng']}&appid={API_KEY}&units=metric"
-            )
-            r        = requests.get(url_weather, timeout=5).json()
-            temp     = r["main"]["temp"]
-            humidity = r["main"]["humidity"]
-        except Exception:
-            pass
+        # Run both current + prediction
+        preds = get_predictions(device_id, forecast_3h, forecast_6h, clf)
 
-        try:
-            url_forecast = (
-                f"https://api.openweathermap.org/data/2.5/forecast"
-                f"?lat={loc['lat']}&lon={loc['lng']}&appid={API_KEY}&units=metric&cnt=1"
-            )
-            f_data           = requests.get(url_forecast, timeout=5).json()
-            forecast_rain_3h = f_data["list"][0].get("rain", {}).get("3h", 0.0)
-        except Exception:
-            forecast_rain_3h = 0.0
+        # Trend arrow
+        trend_text, trend_color = trend_arrow(
+            preds["current_risk"], preds["pred_risk_3h"]
+        )
 
-        # Get prediction using THIS bridge's own sensor data
-        risk, color, confidence = ml_predict_from_sensor(device_id, clf)
+        # Forecast label colors
+        def fc_label(mm):
+            if mm >= 10:  return f'<span style="color:#ef4444;font-weight:700">{mm:.2f} mm ⚠️ Heavy</span>'
+            elif mm >= 2.5: return f'<span style="color:#f59e0b;font-weight:700">{mm:.2f} mm ⚠️ Moderate</span>'
+            else:         return f'<span style="color:#22c55e">{mm:.2f} mm (Light/None)</span>'
 
-        # Read THIS bridge's sensor values
-        sensor         = latest_sensor_data[device_id]
-        water_level_cm = sensor["water_level"]
-        current_rain   = sensor["rainfall"]
-        rain_3h        = sensor.get("rain_3h",   0)
-        rise_rate      = sensor.get("rise_rate", 0)
-        flow_rate      = sensor["flow_rate"]
-
-        # Color-coded forecast label
-        if forecast_rain_3h >= 10:
-            forecast_label = (f'<span style="color:red;font-weight:bold;">'
-                              f'{forecast_rain_3h:.2f} mm ⚠️ Heavy</span>')
-        elif forecast_rain_3h >= 2.5:
-            forecast_label = (f'<span style="color:orange;font-weight:bold;">'
-                              f'{forecast_rain_3h:.2f} mm ⚠️ Moderate</span>')
-        else:
-            forecast_label = (f'<span style="color:green;">'
-                              f'{forecast_rain_3h:.2f} mm (Light/None)</span>')
+        sensor = latest_sensor_data[device_id]
 
         popup = f"""
-        <div style="font-size:14px;">
-            <b>{loc['name']}</b><br>
-            <small style="color:gray;">Sensor: {device_id}</small><br><br>
-            🌊 <b>Flood Risk:</b> <span style="color:{color}; font-weight:bold;">{risk}</span><br>
-            🎯 <b>Confidence:</b> {confidence}%<br><br>
-            <b>── Sensor Readings ──</b><br>
-            🌧 <b>Rainfall (now):</b>  {current_rain:.2f} mm<br>
-            🌧 <b>Rainfall (3h):</b>   {rain_3h:.2f} mm<br>
-            📏 <b>Water Level:</b>     {water_level_cm:.2f} cm<br>
-            📈 <b>Rise Rate:</b>       {rise_rate:.2f} cm/reading<br>
-            💧 <b>Flow Rate:</b>       {flow_rate:.2f} L<br><br>
-            <b>── Weather Forecast ──</b><br>
-            🔮 <b>Rainfall (next 3h):</b> {forecast_label}<br>
-            🌡 <b>Temperature:</b>     {temp:.1f} °C<br>
-            💧 <b>Humidity:</b>        {humidity}%<br><br>
-            🕒 <b>Updated:</b> {timestamp}
+        <div style="font-size:13px; line-height:1.6;">
+            <b style="font-size:15px">{loc['name']}</b><br>
+            <span style="font-size:11px;color:#64748b">Sensor: {device_id}</span><br><br>
+
+            <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px">
+                <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                            letter-spacing:0.06em;margin-bottom:4px">📍 Current Risk</div>
+                <b style="font-size:18px;color:{preds['current_color']}">
+                    {preds['current_risk']} Risk
+                </b>
+                <span style="font-size:11px;color:#64748b;margin-left:6px">
+                    {preds['current_conf']}% confidence
+                </span>
+            </div>
+
+            <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
+                        border-left:3px solid {preds['pred_color_3h']}">
+                <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                            letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 3 Hours</div>
+                <b style="font-size:16px;color:{preds['pred_color_3h']}">
+                    {preds['pred_risk_3h']} Risk
+                </b>
+                <span style="font-size:11px;color:#64748b;margin-left:6px">
+                    {preds['pred_conf_3h']}% confidence
+                </span><br>
+                <span style="font-size:11px;color:{trend_color}">
+                    {trend_text}
+                </span>
+            </div>
+
+            <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
+                        border-left:3px solid {preds['pred_color_6h']}">
+                <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                            letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 6 Hours</div>
+                <b style="font-size:14px;color:{preds['pred_color_6h']}">
+                    {preds['pred_risk_6h']} Risk
+                </b>
+                <span style="font-size:11px;color:#64748b;margin-left:6px">
+                    {preds['pred_conf_6h']}% confidence
+                </span>
+            </div>
+
+            <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
+                <b style="color:#e2e8f0">── Sensor Readings ──</b><br>
+                🌧 Rainfall (now): {sensor['rainfall']:.2f} mm<br>
+                🌧 Rainfall (3h):  {preds['rain_3h']:.2f} mm<br>
+                📏 Water Level:    {sensor['water_level']:.2f} cm<br>
+                📈 Rise Rate:      {preds['rise_rate']:.2f} cm/reading<br>
+                💧 Flow Rate:      {sensor['flow_rate']:.2f} L
+            </div>
+
+            <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
+                <b style="color:#e2e8f0">── Weather Forecast ──</b><br>
+                🔮 Rain (next 3h): {fc_label(forecast_3h)}<br>
+                🔮 Rain (next 6h): {fc_label(forecast_6h)}<br>
+                🌡 Temperature:    {temp:.1f} °C<br>
+                💧 Humidity:       {humidity}%
+            </div>
+
+            <div style="font-size:10px;color:#475569;margin-top:6px">
+                🕒 Updated: {timestamp}<br>
+                🌲 Prediction: Random Forest + OpenWeatherMap Forecast
+            </div>
         </div>
         """
 
+        # Map marker uses the PREDICTED 3h color so it warns BEFORE flood happens
+        marker_color = preds["pred_color_3h"]
+
         data_list.append({
-            "id":         loc["id"],
-            "lat":        loc["lat"],
-            "lng":        loc["lng"],
-            "risk_color": color,
-            "popup_html": popup
+            "id":              loc["id"],
+            "lat":             loc["lat"],
+            "lng":             loc["lng"],
+            "risk_color":      marker_color,   # marker shows predicted risk
+            "popup_html":      popup,
+            "current_risk":    preds["current_risk"],
+            "pred_risk_3h":    preds["pred_risk_3h"],
+            "confidence":      preds["current_conf"],
+            "water_level":     sensor["water_level"],
+            "rainfall":        sensor["rainfall"],
+            "flow_rate":       sensor["flow_rate"],
+            "rise_rate":       preds["rise_rate"],
+            "forecast_3h":     forecast_3h,
         })
 
     return jsonify({"locations": data_list})
-
-# =========================================
-# MAIN PAGE
-# =========================================
-@app.route("/")
-def home():
-    return render_template("map.html")
-
-# =========================================
-# RUN APP
-# =========================================
-if __name__ == "__main__":
-    print("FloodGuide Running...")
-    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-        t = threading.Thread(target=keep_alive, daemon=True)
-        t.start()
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
 
 # =========================================
 # DASHBOARD PAGE + API
@@ -405,7 +543,6 @@ def dashboard_data():
         conn   = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # Last 50 readings per bridge
         cursor.execute(
             "SELECT * FROM sensor_readings WHERE device_id = 'bridge1' "
             "ORDER BY timestamp DESC LIMIT 50"
@@ -418,29 +555,25 @@ def dashboard_data():
         )
         bridge2 = list(reversed(cursor.fetchall()))
 
-        # Recent 20 rows (all devices)
         cursor.execute(
             "SELECT * FROM sensor_readings ORDER BY timestamp DESC LIMIT 20"
         )
         recent = cursor.fetchall()
 
-        # Summary stats
         cursor.execute("""
             SELECT
-                COUNT(*)                                          AS total,
-                SUM(CASE WHEN flooded = 2 THEN 1 ELSE 0 END)    AS high,
-                SUM(CASE WHEN flooded = 1 THEN 1 ELSE 0 END)    AS moderate,
+                COUNT(*)                                       AS total,
+                SUM(CASE WHEN flooded=2 THEN 1 ELSE 0 END)   AS high,
+                SUM(CASE WHEN flooded=1 THEN 1 ELSE 0 END)   AS moderate,
                 AVG(CASE WHEN device_id='bridge1'
-                         THEN water_level END)                   AS avg_water_level,
-                MAX(total_rain)                                  AS max_rain
+                         THEN water_level END)                AS avg_water_level,
+                MAX(total_rain)                               AS max_rain
             FROM sensor_readings
         """)
         stats = cursor.fetchone()
-
         cursor.close()
         conn.close()
 
-        # Convert timestamps to strings for JSON
         def serialize(rows):
             out = []
             for r in rows:
@@ -461,3 +594,20 @@ def dashboard_data():
     except Exception as e:
         print(f"❌ Dashboard data error: {e}")
         return jsonify({"error": str(e)}), 500
+
+# =========================================
+# MAIN PAGE
+# =========================================
+@app.route("/")
+def home():
+    return render_template("map.html")
+
+# =========================================
+# RUN APP
+# =========================================
+if __name__ == "__main__":
+    print("FloodGuide Running...")
+    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        t = threading.Thread(target=keep_alive, daemon=True)
+        t.start()
+    app.run(host="0.0.0.0", port=5000, debug=True)
