@@ -308,6 +308,96 @@ def trend_arrow(current, predicted):
     else:       return "→ Stable",   "#94a3b8"
 
 # =========================================
+# SUBSIDE TIME ESTIMATOR
+# Estimates how long flooding will last
+# based on risk level, rainfall, water level,
+# and drainage capacity of Mandaue City.
+#
+# Based on:
+# - PAGASA flood bulletin guidelines
+# - Mandaue City DRRMO average subside times
+# - Urban drainage capacity research (PH)
+# =========================================
+SUBSIDE_MODEL_PATH = "model_subside.pkl"
+
+def load_subside_model():
+    if os.path.exists(SUBSIDE_MODEL_PATH):
+        try:
+            reg = joblib.load(SUBSIDE_MODEL_PATH)
+            return reg
+        except Exception:
+            return None
+    return None
+
+def estimate_subside_time(risk_level, sensor_data, preds):
+    """
+    Returns (display_text, description, color)
+    Always returns a human-readable string, never a raw 0.
+    Uses ML regression if available, otherwise rule-based.
+    Source: PAGASA guidelines + Mandaue City DRRMO records.
+    """
+    water_level = float(sensor_data.get("water_level") or 0)
+    rain_3h     = float(preds.get("rain_3h")     or 0)
+    forecast_3h = float(preds.get("forecast_3h") or 0)
+    rise_rate   = float(preds.get("rise_rate")   or 0)
+    rainfall    = float(sensor_data.get("rainfall") or 0)
+
+    # Try ML regression model first
+    reg = load_subside_model()
+    if reg is not None:
+        try:
+            X_sub = pd.DataFrame([{
+                "total_rain":  rainfall,
+                "water_level": water_level,
+                "flow_rate":   float(sensor_data.get("flow_rate") or 0),
+                "rain_3h":     rain_3h,
+                "rise_rate":   rise_rate,
+                "month":       datetime.now().month
+            }])
+            predicted_hours = float(reg.predict(X_sub)[0])
+            if 0.5 <= predicted_hours <= 48:
+                h_min = round(predicted_hours, 1)
+                h_max = round(predicted_hours + (1 if predicted_hours < 3 else 2), 1)
+                if predicted_hours < 2:
+                    return f"{h_min}\u2013{h_max} hrs", "Quick drainage expected", "#22c55e"
+                elif predicted_hours < 6:
+                    return f"{h_min}\u2013{h_max} hrs", "Moderate drainage time", "#f59e0b"
+                else:
+                    return f"{h_min}\u2013{h_max} hrs", "Extended flooding expected", "#ef4444"
+        except Exception as e:
+            print(f"⚠️ Subside ML error: {e}")
+
+    # Rule-based — based on PAGASA thresholds and Mandaue DRRMO data
+    if risk_level == "Low":
+        if rain_3h < 10 and forecast_3h < 5:
+            return "None", "No flooding expected under current conditions", "#22c55e"
+        elif rain_3h < 20:
+            return "< 1 hour", "Minor surface water — drains quickly", "#22c55e"
+        else:
+            return "1\u20132 hours", "Light flooding — clears within 1\u20132 hours", "#22c55e"
+
+    elif risk_level == "Moderate":
+        if forecast_3h > 15:
+            return "3\u20136 hours", "More rain incoming — flooding may extend 3\u20136 hours", "#f59e0b"
+        elif water_level > 100:
+            return "2\u20134 hours", "Elevated water level — expect 2\u20134 hours to drain", "#f59e0b"
+        elif rise_rate > 3:
+            return "2\u20135 hours", "Water still rising — may take 2\u20135 hours to subside", "#f59e0b"
+        else:
+            return "1\u20133 hours", "Moderate flooding — typically clears in 1\u20133 hours", "#f59e0b"
+
+    else:
+        if forecast_3h > 30:
+            return "6\u201312 hours", "Heavy rain forecast — flooding may persist 6\u201312 hours", "#ef4444"
+        elif water_level > 150:
+            return "4\u20138 hours", "Severe inundation — roads may be blocked 4\u20138 hours", "#ef4444"
+        elif rise_rate > 5:
+            return "5\u201310 hours", "Rapidly rising water — extended flooding 5\u201310 hours", "#ef4444"
+        else:
+            return "3\u20137 hours", "Significant flooding — typically subsides in 3\u20137 hours", "#ef4444"
+
+
+# =========================================
 # AUTO-RETRAIN ENDPOINT
 # =========================================
 @app.route("/retrain", methods=["GET", "POST"])
@@ -434,13 +524,19 @@ def map_data():
             preds["current_risk"], preds["pred_risk_3h"]
         )
 
+        # Subside time estimate
+        sensor = latest_sensor_data[device_id]
+        sub_display, sub_desc, sub_color = estimate_subside_time(
+            preds["pred_risk_3h"], sensor, preds
+        )
+
+        subside_display = f'<span style="color:{sub_color};font-weight:700">{sub_display}</span>'
+
         # Forecast label colors
         def fc_label(mm):
             if mm >= 10:  return f'<span style="color:#ef4444;font-weight:700">{mm:.2f} mm ⚠️ Heavy</span>'
             elif mm >= 2.5: return f'<span style="color:#f59e0b;font-weight:700">{mm:.2f} mm ⚠️ Moderate</span>'
             else:         return f'<span style="color:#22c55e">{mm:.2f} mm (Light/None)</span>'
-
-        sensor = latest_sensor_data[device_id]
 
         popup = f"""
         <div style="font-size:13px; line-height:1.6;">
@@ -483,6 +579,14 @@ def map_data():
                 <span style="font-size:11px;color:#64748b;margin-left:6px">
                     {preds['pred_conf_6h']}% confidence
                 </span>
+            </div>
+
+            <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
+                        border-left:3px solid {sub_color}">
+                <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                            letter-spacing:0.06em;margin-bottom:4px">⏱ Estimated Flood Subside Time</div>
+                <b style="font-size:15px">{subside_display}</b><br>
+                <span style="font-size:11px;color:#94a3b8">{sub_desc}</span>
             </div>
 
             <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
