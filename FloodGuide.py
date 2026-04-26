@@ -29,10 +29,7 @@ def get_db_connection():
 # =========================================
 API_KEY    = "e2a8ee9c6e8ec237763497022a1309bb"
 MODEL_PATH = "model_class.pkl"
-GOOGLE_MAPS_API_KEY = os.getenv(
-    "GOOGLE_MAPS_API_KEY",
-    "AIzaSyBfyF6DofStbAoUKcG83eEBE72OpaLqTus"
-)
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
 # Separate in-memory state for each bridge
 latest_sensor_data = {
