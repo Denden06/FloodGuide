@@ -3,759 +3,584 @@
 <head>
   <title>FloodGuide – Real-Time Flood Risk Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/leaflet-routing-machine.min.css"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body, html { height: 100%; font-family: 'Inter', 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; overflow: hidden; }
 
-    /* ── TOPBAR ── */
-    .topbar {
-      position: fixed; top: 0; left: 0; right: 0; height: 56px;
-      background: #1e293bef; backdrop-filter: blur(12px);
-      border-bottom: 1px solid #334155;
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0 1rem; z-index: 9999;
+    body, html {
+      height: 100%;
+      font-family: 'Inter', 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      overflow: hidden;
     }
-    .topbar-left { display: flex; align-items: center; gap: 0.6rem; }
-    .logo { font-size: 1rem; font-weight: 700; color: #38bdf8; letter-spacing: 0.05em; }
+
+    /* ── TOP NAV ── */
+    .topbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 56px;
+      background: #1e293bef;
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid #334155;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 1.25rem;
+      z-index: 9999;
+    }
+
+    .topbar-left { display: flex; align-items: center; gap: 0.75rem; }
+
+    .logo { font-size: 1.05rem; font-weight: 700; color: #38bdf8; letter-spacing: 0.05em; }
     .logo span { color: #64748b; font-weight: 400; }
-    .live-indicator { display: flex; align-items: center; gap: 0.3rem; font-size: 0.6rem; font-weight: 600; color: #22c55e; text-transform: uppercase; letter-spacing: 0.08em; }
-    .live-dot { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; animation: blink 2s infinite; }
-    @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.2} }
-    .topbar-right { display: flex; align-items: center; gap: 0.3rem; flex-wrap: nowrap; }
+
+    .live-indicator {
+      display: flex; align-items: center; gap: 0.35rem;
+      font-size: 0.65rem; font-weight: 600;
+      color: #22c55e; letter-spacing: 0.08em; text-transform: uppercase;
+    }
+
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #22c55e; animation: blink 2s infinite;
+    }
+
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+    .topbar-right { display: flex; align-items: center; gap: 0.4rem; }
 
     .nav-btn {
-      display: flex; align-items: center; gap: 0.3rem;
-      padding: 0.35rem 0.7rem; border-radius: 6px;
-      font-size: 0.73rem; font-weight: 500; text-decoration: none;
-      border: 1px solid #334155; background: transparent; color: #94a3b8;
-      cursor: pointer; transition: all 0.15s; white-space: nowrap; font-family: inherit;
+      display: flex; align-items: center; gap: 0.35rem;
+      padding: 0.38rem 0.85rem; border-radius: 7px;
+      font-size: 0.78rem; font-weight: 500;
+      text-decoration: none; border: 1px solid #334155;
+      background: transparent; color: #94a3b8;
+      cursor: pointer; transition: all 0.18s;
+      white-space: nowrap; font-family: inherit;
     }
+
     .nav-btn:hover { background: #1e293b; color: #e2e8f0; border-color: #475569; }
-    .nav-btn.active  { background: #38bdf820; border-color: #38bdf860; color: #38bdf8; }
+    .nav-btn.active { background: #38bdf820; border-color: #38bdf860; color: #38bdf8; }
     .nav-btn.btn-route { background: #f59e0b20; border-color: #f59e0b60; color: #f59e0b; }
-    .nav-btn.btn-sim   { background: #a855f720; border-color: #a855f760; color: #a855f7; }
-    .nav-btn.btn-hist  { background: #06b6d420; border-color: #06b6d460; color: #06b6d4; }
-    .nav-btn.btn-avp   { background: #22c55e20; border-color: #22c55e60; color: #22c55e; }
-    .ml-badge { display: flex; align-items: center; gap: 0.3rem; padding: 0.35rem 0.7rem; border-radius: 6px; font-size: 0.7rem; font-weight: 600; border: 1px solid; cursor: pointer; white-space: nowrap; }
+    .nav-btn.btn-route:hover { background: #f59e0b35; }
+
+    .ml-badge {
+      display: flex; align-items: center; gap: 0.35rem;
+      padding: 0.38rem 0.85rem; border-radius: 7px;
+      font-size: 0.72rem; font-weight: 600; border: 1px solid;
+      cursor: pointer; transition: all 0.18s; white-space: nowrap;
+    }
+
     .ml-active   { background:#22c55e18; border-color:#22c55e50; color:#22c55e; }
     .ml-fallback { background:#f59e0b18; border-color:#f59e0b50; color:#f59e0b; }
-
-    /* ── SIMULATION BANNER ── */
-    .sim-banner {
-      position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
-      background: #a855f7; color: white; padding: 0.4rem 1.2rem;
-      border-radius: 0 0 8px 8px; font-size: 0.72rem; font-weight: 700;
-      z-index: 9998; display: none; letter-spacing: 0.04em;
-      box-shadow: 0 4px 12px #a855f740; cursor: pointer;
-    }
-    .sim-banner.visible { display: block; }
 
     /* ── MAP ── */
     #map { position: fixed; top: 56px; left: 0; right: 0; bottom: 0; }
 
-    /* ── ROUTING CONTROL OVERRIDE (hide default panel) ── */
-    .leaflet-routing-container { display: none !important; }
-
     /* ── SIDE PANELS ── */
     .side-panel {
       position: fixed; top: 56px; right: 0;
-      width: 320px; height: calc(100vh - 56px);
+      width: 300px; height: calc(100vh - 56px);
       background: #1e293bef; backdrop-filter: blur(12px);
-      border-left: 1px solid #334155; padding: 1.1rem;
-      overflow-y: auto; z-index: 9998;
+      border-left: 1px solid #334155;
+      padding: 1.25rem; overflow-y: auto;
+      z-index: 9998;
       transform: translateX(100%);
       transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
     }
+
     .side-panel.open { transform: translateX(0); }
-    .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
-    .panel-title { font-size: 0.7rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; }
-    .panel-close { cursor: pointer; color: #475569; font-size: 1.1rem; line-height: 1; transition: color 0.15s; }
+
+    .panel-header {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 1.1rem;
+    }
+
+    .panel-title {
+      font-size: 0.72rem; font-weight: 600;
+      color: #64748b; text-transform: uppercase; letter-spacing: 0.08em;
+    }
+
+    .panel-close {
+      cursor: pointer; color: #475569;
+      font-size: 1.1rem; line-height: 1; transition: color 0.15s;
+    }
+
     .panel-close:hover { color: #e2e8f0; }
 
-    /* ── SHARED SUBCOMPONENTS ── */
-    .section-title { font-size: 0.6rem; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: 0.06em; margin: 0.75rem 0 0.35rem; }
-    .chip { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.63rem; font-weight: 700; }
-    .chip-low  { background:#22c55e20; color:#22c55e; }
-    .chip-mod  { background:#f59e0b20; color:#f59e0b; }
-    .chip-high { background:#ef444420; color:#ef4444; }
-    .intro-text { font-size: 0.73rem; color: #94a3b8; line-height: 1.55; margin-bottom: 0.85rem; }
-    .select-lbl { font-size: 0.62rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.3rem; }
-    .fselect { width: 100%; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; padding: 0.5rem 0.65rem; font-size: 0.75rem; margin-bottom: 0.65rem; outline: none; font-family: inherit; }
-    .fselect:focus { border-color: #38bdf8; }
-    .action-btn { width: 100%; padding: 0.55rem; border: none; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer; font-family: inherit; margin-bottom: 0.85rem; transition: opacity 0.15s; }
-    .action-btn:hover { opacity: 0.88; }
-    .btn-blue   { background: #38bdf8; color: #0f172a; }
-    .btn-cyan   { background: #06b6d4; color: #0f172a; }
-    .infobox { padding: 0.5rem 0.65rem; border-radius: 6px; background: #0f172a; font-size: 0.63rem; color: #475569; line-height: 1.5; margin-top: 0.5rem; }
+    /* ── THRESHOLD PANEL ── */
+    .thresh-section-title {
+      font-size: 0.62rem; font-weight: 600; color: #475569;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      margin: 0.85rem 0 0.4rem;
+    }
 
-    /* ── ROUTE CARDS ── */
-    .route-card { background: #0f172a; border-radius: 7px; padding: 0.75rem; margin-bottom: 0.5rem; border-left: 3px solid #22c55e; }
-    .route-card.warn   { border-left-color: #f59e0b; }
-    .route-card.danger { border-left-color: #ef4444; }
-    .route-rank { font-size: 0.58rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.2rem; }
-    .route-name { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem; }
-    .route-desc { font-size: 0.67rem; color: #94a3b8; line-height: 1.45; margin-bottom: 0.35rem; }
-    .route-status { display: inline-block; font-size: 0.58rem; font-weight: 700; padding: 0.08rem 0.4rem; border-radius: 4px; }
-    .s-safe  { background:#22c55e20; color:#22c55e; }
-    .s-caut  { background:#f59e0b20; color:#f59e0b; }
-    .s-avoid { background:#ef444420; color:#ef4444; }
-    .show-route-btn { display: inline-block; margin-left: 0.4rem; font-size: 0.58rem; font-weight: 700; padding: 0.08rem 0.4rem; border-radius: 4px; background: #38bdf820; color: #38bdf8; border: 1px solid #38bdf850; cursor: pointer; }
-    .route-empty { text-align: center; padding: 1.5rem 0; color: #475569; font-size: 0.75rem; }
+    .thresh-row {
+      display: flex; justify-content: space-between;
+      align-items: center; padding: 0.45rem 0;
+      border-bottom: 1px solid #ffffff08;
+    }
 
-    /* ── SIMULATION ── */
-    .sim-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.85rem; }
-    .sim-btn { padding: 0.55rem; border: 1px solid; border-radius: 7px; font-size: 0.75rem; font-weight: 700; cursor: pointer; text-align: center; font-family: inherit; background: transparent; transition: all 0.15s; }
-    .sim-low  { border-color:#22c55e60; color:#22c55e; }
-    .sim-low:hover  { background:#22c55e20; }
-    .sim-mod  { border-color:#f59e0b60; color:#f59e0b; }
-    .sim-mod:hover  { background:#f59e0b20; }
-    .sim-high { border-color:#ef444460; color:#ef4444; }
-    .sim-high:hover { background:#ef444420; }
-    .sim-reset{ border-color:#64748b60; color:#64748b; grid-column:1/-1; }
-    .sim-reset:hover { background:#64748b20; }
-    .sim-status { padding: 0.6rem 0.7rem; border-radius: 7px; font-size: 0.73rem; display: none; margin-bottom: 0.75rem; }
-    .sim-status.show { display: block; }
-
-    /* ── HISTORICAL ── */
-    .hist-list { max-height: 420px; overflow-y: auto; }
-    .hist-item { background: #0f172a; border-radius: 7px; padding: 0.65rem; margin-bottom: 0.4rem; cursor: pointer; border: 1px solid #1e3a5f; transition: border-color 0.15s; }
-    .hist-item:hover { border-color: #38bdf8; }
-    .hist-item.replaying { border-color: #a855f7 !important; background: #a855f710; }
-    .hist-ts   { font-size: 0.63rem; color: #64748b; margin-bottom: 0.2rem; }
-    .hist-vals { font-size: 0.68rem; color: #94a3b8; }
-    .hist-risk { display: inline-block; font-size: 0.58rem; font-weight: 700; padding: 0.06rem 0.38rem; border-radius: 4px; margin-bottom: 0.2rem; }
-    .hist-empty { text-align: center; padding: 1.5rem 0; color: #475569; font-size: 0.75rem; }
-
-    /* ── ACTUAL VS PREDICTED ── */
-    .accuracy-box { background: #0f172a; border-radius: 7px; padding: 0.85rem; margin-bottom: 0.85rem; text-align: center; }
-    .accuracy-pct { font-size: 2.4rem; font-weight: 700; line-height: 1; }
-    .accuracy-lbl { font-size: 0.62rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 0.2rem; }
-    .accuracy-sub { font-size: 0.68rem; color: #94a3b8; margin-top: 0.3rem; }
-    .conf-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.4rem; margin-bottom: 0.85rem; }
-    .conf-cell { background: #0f172a; border-radius: 6px; padding: 0.5rem; text-align: center; }
-    .conf-num { font-size: 1.1rem; font-weight: 700; }
-    .conf-lbl { font-size: 0.58rem; color: #64748b; margin-top: 0.1rem; }
-    .avp-table-wrap { overflow-x: auto; }
-    .avp-table { width: 100%; border-collapse: collapse; font-size: 0.63rem; }
-    .avp-table th { color: #64748b; text-align: left; padding: 0.3rem 0.35rem; border-bottom: 1px solid #334155; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
-    .avp-table td { padding: 0.32rem 0.35rem; border-bottom: 1px solid #1e293b; color: #94a3b8; }
-    .avp-table tr:last-child td { border-bottom: none; }
-    .match-y { color: #22c55e; font-weight: 700; }
-    .match-n { color: #ef4444; font-weight: 700; }
-
-    /* ── THRESHOLD ── */
-    .thresh-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid #ffffff08; }
     .thresh-row:last-of-type { border-bottom: none; }
-    .thresh-label { font-size: 0.72rem; color: #94a3b8; }
-    .thresh-source { margin-top: 0.75rem; padding: 0.5rem 0.65rem; background: #0f172a; border-radius: 6px; font-size: 0.63rem; color: #475569; line-height: 1.5; }
+    .thresh-label { font-size: 0.75rem; color: #94a3b8; }
+
+    .chip {
+      display: inline-block; padding: 0.12rem 0.55rem;
+      border-radius: 5px; font-size: 0.65rem; font-weight: 700;
+    }
+
+    .chip-low      { background:#22c55e20; color:#22c55e; }
+    .chip-moderate { background:#f59e0b20; color:#f59e0b; }
+    .chip-high     { background:#ef444420; color:#ef4444; }
+
+    .thresh-source {
+      margin-top: 1rem; padding: 0.6rem 0.75rem;
+      background: #0f172a; border-radius: 7px;
+      font-size: 0.65rem; color: #475569; line-height: 1.55;
+    }
 
     /* ── ML PANEL ── */
-    .ml-status-box { display: flex; gap: 0.65rem; align-items: flex-start; margin-bottom: 0.85rem; padding: 0.65rem; background: #0f172a; border-radius: 7px; }
-    .ml-icon { font-size: 1.3rem; }
-    .ml-st  { font-size: 0.82rem; font-weight: 600; margin-bottom: 0.1rem; }
-    .ml-sub { font-size: 0.65rem; color: #64748b; }
-    .ml-row { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid #ffffff08; font-size: 0.72rem; }
+    .ml-status-row {
+      display: flex; gap: 0.75rem; align-items: flex-start;
+      margin-bottom: 1rem; padding: 0.75rem;
+      background: #0f172a; border-radius: 8px;
+    }
+
+    .ml-icon { font-size: 1.5rem; line-height: 1; }
+    .ml-status-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.15rem; }
+    .ml-status-sub   { font-size: 0.68rem; color: #64748b; }
+
+    .ml-row {
+      display: flex; justify-content: space-between;
+      padding: 0.45rem 0; border-bottom: 1px solid #ffffff08;
+      font-size: 0.75rem;
+    }
+
     .ml-row:last-child { border-bottom: none; }
-    .ml-key { color: #64748b; } .ml-val { color: #e2e8f0; font-weight: 500; }
-    .feat-row { display: flex; justify-content: space-between; font-size: 0.63rem; margin-bottom: 0.15rem; }
-    .feat-k { color: #94a3b8; } .feat-p { color: #38bdf8; font-weight: 600; }
-    .feat-bg { height: 3px; background: #1e3a5f; border-radius: 3px; margin-bottom: 0.4rem; overflow: hidden; }
-    .feat-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg,#38bdf8,#818cf8); }
+    .ml-key   { color: #64748b; }
+    .ml-value { color: #e2e8f0; font-weight: 500; }
+
+    .feat-label-row {
+      display: flex; justify-content: space-between;
+      font-size: 0.68rem; margin-bottom: 0.2rem;
+    }
+
+    .feat-key { color: #94a3b8; }
+    .feat-pct { color: #38bdf8; font-weight: 600; }
+
+    .feat-bar-bg {
+      height: 4px; background: #1e3a5f;
+      border-radius: 4px; margin-bottom: 0.5rem; overflow: hidden;
+    }
+
+    .feat-bar-fill {
+      height: 100%; border-radius: 4px;
+      background: linear-gradient(90deg, #38bdf8, #818cf8);
+    }
+
+    /* ── SAFE ROUTES PANEL ── */
+    .route-intro {
+      font-size: 0.75rem; color: #94a3b8;
+      line-height: 1.6; margin-bottom: 1rem;
+    }
+
+    .route-select-label {
+      font-size: 0.65rem; font-weight: 600; color: #64748b;
+      text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 0.35rem;
+    }
+
+    .route-select {
+      width: 100%; background: #0f172a; border: 1px solid #334155;
+      border-radius: 7px; color: #e2e8f0;
+      padding: 0.55rem 0.75rem; font-size: 0.78rem;
+      margin-bottom: 0.75rem; outline: none; font-family: inherit;
+    }
+
+    .route-select:focus { border-color: #38bdf8; }
+
+    .route-btn {
+      width: 100%; padding: 0.6rem; background: #38bdf8;
+      color: #0f172a; border: none; border-radius: 7px;
+      font-size: 0.82rem; font-weight: 700;
+      cursor: pointer; transition: opacity 0.18s;
+      font-family: inherit; margin-bottom: 1rem;
+    }
+
+    .route-btn:hover { opacity: 0.88; }
+
+    .route-card {
+      background: #0f172a; border-radius: 8px;
+      padding: 0.85rem; margin-bottom: 0.6rem;
+      border-left: 3px solid #22c55e;
+    }
+
+    .route-card.warning { border-left-color: #f59e0b; }
+    .route-card.danger  { border-left-color: #ef4444; }
+
+    .route-rank {
+      font-size: 0.6rem; color: #64748b;
+      margin-bottom: 0.25rem;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+
+    .route-name { font-size: 0.82rem; font-weight: 600; margin-bottom: 0.3rem; }
+    .route-desc { font-size: 0.7rem; color: #94a3b8; line-height: 1.5; }
+
+    .route-status {
+      display: inline-block; font-size: 0.6rem; font-weight: 700;
+      padding: 0.1rem 0.45rem; border-radius: 4px; margin-top: 0.4rem;
+    }
+
+    .status-safe    { background:#22c55e20; color:#22c55e; }
+    .status-caution { background:#f59e0b20; color:#f59e0b; }
+    .status-avoid   { background:#ef444420; color:#ef4444; }
+
+    .route-empty {
+      text-align: center; padding: 2rem 0;
+      color: #475569; font-size: 0.78rem;
+    }
 
     /* ── LEGEND ── */
-    #legend { position: fixed; bottom: 1.5rem; left: 1rem; background: #1e293bed; backdrop-filter: blur(8px); padding: 0.75rem 0.9rem; border: 1px solid #334155; border-radius: 9px; z-index: 9997; }
-    .legend-title { font-size: 0.58rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.4rem; }
-    .legend-item { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.25rem; font-size: 0.72rem; color: #cbd5e1; }
-    .legend-item:last-child { margin-bottom: 0; }
-    .legend-dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-    .legend-line { width: 18px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+    #legend {
+      position: fixed; bottom: 2rem; left: 1rem;
+      background: #1e293bed; backdrop-filter: blur(8px);
+      padding: 0.85rem 1rem; border: 1px solid #334155;
+      border-radius: 10px; font-size: 0.78rem;
+      z-index: 9997;
+    }
 
-    /* ── LEAFLET DARK THEME ── */
-    .leaflet-popup-content-wrapper { background:#1e293b!important; border:1px solid #334155!important; border-radius:10px!important; box-shadow:0 8px 32px #00000080!important; color:#e2e8f0!important; }
-    .leaflet-popup-tip { background:#1e293b!important; }
-    .leaflet-popup-close-button { color:#64748b!important; top:8px!important; right:8px!important; }
-    .leaflet-popup-content { margin:12px 14px!important; }
+    .legend-title {
+      font-size: 0.62rem; font-weight: 600; color: #64748b;
+      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.5rem;
+    }
+
+    .legend-item {
+      display: flex; align-items: center;
+      gap: 0.5rem; margin-bottom: 0.3rem; color: #cbd5e1;
+    }
+
+    .legend-item:last-child { margin-bottom: 0; }
+
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    /* Leaflet dark popup */
+    .leaflet-popup-content-wrapper {
+      background: #1e293b !important; border: 1px solid #334155 !important;
+      border-radius: 10px !important; box-shadow: 0 8px 32px #00000080 !important;
+      color: #e2e8f0 !important;
+    }
+
+    .leaflet-popup-tip { background: #1e293b !important; }
+    .leaflet-popup-close-button { color: #64748b !important; top: 8px !important; right: 8px !important; }
+    .leaflet-popup-content { margin: 14px 16px !important; }
   </style>
 </head>
 <body>
 
-<!-- ══════════════ TOPBAR ══════════════ -->
+<!-- ── TOP NAV ── -->
 <div class="topbar">
   <div class="topbar-left">
     <div class="logo">FLOOD<span>GUIDE</span></div>
-    <div class="live-indicator"><div class="live-dot"></div>Live</div>
+    <div class="live-indicator">
+      <div class="live-dot"></div>
+      Live
+    </div>
   </div>
+
   <div class="topbar-right">
-    <a href="/"          class="nav-btn active">🗺 Map</a>
+    <a href="/" class="nav-btn active">🗺 Map</a>
     <a href="/dashboard" class="nav-btn">📊 Dashboard</a>
-    <button class="nav-btn btn-route" onclick="togglePanel('routePanel')">🛣 Routes</button>
-    <button class="nav-btn btn-sim"   onclick="togglePanel('simPanel')">🎭 Simulate</button>
-    <button class="nav-btn btn-hist"  onclick="togglePanel('histPanel')">📅 History</button>
-    <button class="nav-btn btn-avp"   onclick="togglePanel('avpPanel')">📈 Actual vs Predicted</button>
-    <button class="nav-btn"           onclick="togglePanel('threshPanel')">⚠️ Thresholds</button>
-    <div class="ml-badge ml-active" id="mlBadge" onclick="togglePanel('mlPanel')">🌲 <span id="mlBadgeText">Random Forest</span></div>
+    <button class="nav-btn btn-route" onclick="togglePanel('routePanel')">🛣 Safe Routes</button>
+    <button class="nav-btn" onclick="togglePanel('threshPanel')">⚠️ Thresholds</button>
+    <div class="ml-badge ml-active" id="mlBadge" onclick="togglePanel('mlPanel')">
+      🌲 <span id="mlBadgeText">Random Forest</span>
+    </div>
   </div>
 </div>
 
-<!-- ══════════════ SIM BANNER ══════════════ -->
-<div class="sim-banner" id="simBanner" onclick="simulate('reset')">
-  🎭 SIMULATION ACTIVE — Click to reset
-</div>
-
-<!-- ══════════════ MAP ══════════════ -->
+<!-- ── MAP ── -->
 <div id="map"></div>
 
-<!-- ══════════════ LEGEND ══════════════ -->
+<!-- ── LEGEND ── -->
 <div id="legend">
-  <div class="legend-title">Flood Risk</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div>Low</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Moderate</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div>High</div>
-  <div class="legend-title" style="margin-top:0.5rem">Routes</div>
-  <div class="legend-item"><div class="legend-line" style="background:#38bdf8"></div>Bridge 1</div>
-  <div class="legend-item"><div class="legend-line" style="background:#a855f7"></div>Bridge 2</div>
-  <div class="legend-item"><div class="legend-line" style="background:#22c55e"></div>CCLEX</div>
+  <div class="legend-title">Flood Risk Levels</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Low Risk</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> Moderate Risk</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div> High Risk</div>
 </div>
 
-<!-- ══════════════ ROUTE PANEL ══════════════ -->
-<div class="side-panel" id="routePanel">
-  <div class="panel-header">
-    <div class="panel-title">Safe Route Planner</div>
-    <span class="panel-close" onclick="closePanel('routePanel')">✕</span>
-  </div>
-  <p class="intro-text">Real road routing via OSRM. The system automatically avoids flooded bridges and recommends the safest available crossing.</p>
-
-  <div class="select-lbl">Starting Location</div>
-  <select class="fselect" id="routeFrom">
-    <option value="10.3310,123.9350">Mandaue City Center</option>
-    <option value="10.3520,123.9120">North Cebu / Consolacion</option>
-    <option value="10.2900,123.8900">Cebu City (SRP / CCLEX side)</option>
-    <option value="10.3050,123.9050">Cebu City Center</option>
-  </select>
-
-  <div class="select-lbl">Destination</div>
-  <select class="fselect" id="routeTo">
-    <option value="10.3100,123.9800">Lapu-Lapu City Center</option>
-    <option value="10.2680,123.9600">Mactan International Airport</option>
-    <option value="10.3350,123.9750">Mactan Shrine Area</option>
-    <option value="10.2900,124.0100">Cordova, Cebu</option>
-  </select>
-
-  <button class="action-btn btn-blue" onclick="planRoute()">🔍 Find Safest Route</button>
-  <button class="action-btn" style="background:#334155;color:#94a3b8;margin-top:-0.5rem" onclick="clearRoutes()">✕ Clear Routes</button>
-
-  <div id="routeResults"><div class="route-empty">Select locations and tap Find Safest Route.</div></div>
-</div>
-
-<!-- ══════════════ SIMULATE PANEL ══════════════ -->
-<div class="side-panel" id="simPanel">
-  <div class="panel-header">
-    <div class="panel-title">Simulate Flood Conditions</div>
-    <span class="panel-close" onclick="closePanel('simPanel')">✕</span>
-  </div>
-  <p class="intro-text">Inject preset sensor values into both bridges to demonstrate how the system responds. Useful for testing and thesis demonstrations.</p>
-
-  <div class="sim-grid">
-    <button class="sim-btn sim-low"  onclick="simulate('low')">🟢 Low Risk</button>
-    <button class="sim-btn sim-mod"  onclick="simulate('moderate')">🟡 Moderate</button>
-    <button class="sim-btn sim-high" onclick="simulate('high')">🔴 High Risk</button>
-    <button class="sim-btn sim-reset" onclick="simulate('reset')">↺ Reset to Live Data</button>
-  </div>
-
-  <div class="sim-status" id="simStatus"></div>
-
-  <div class="infobox">
-    <b style="color:#e2e8f0">Simulated sensor values:</b><br><br>
-    🟢 <b>Low:</b> WL 25 cm · Rain 0.5 mm · Flow 0.1 L<br>
-    🟡 <b>Moderate:</b> WL 95 cm · Rain 18 mm · Flow 2.5 L<br>
-    🔴 <b>High:</b> WL 165 cm · Rain 38 mm · Flow 5.2 L<br><br>
-    Map markers and predictions update within 2–3 seconds. Data is NOT saved to the database.
-  </div>
-</div>
-
-<!-- ══════════════ HISTORY PANEL ══════════════ -->
-<div class="side-panel" id="histPanel">
-  <div class="panel-header">
-    <div class="panel-title">Historical Flood Events</div>
-    <span class="panel-close" onclick="closePanel('histPanel')">✕</span>
-  </div>
-  <p class="intro-text">Past Moderate and High risk readings from the database. Click any event to replay its sensor values on the live map.</p>
-  <div class="hist-list" id="histList">
-    <div class="hist-empty">Loading past events...</div>
-  </div>
-</div>
-
-<!-- ══════════════ ACTUAL VS PREDICTED ══════════════ -->
-<div class="side-panel" id="avpPanel">
-  <div class="panel-header">
-    <div class="panel-title">Actual vs Predicted</div>
-    <span class="panel-close" onclick="closePanel('avpPanel')">✕</span>
-  </div>
-  <p class="intro-text">Compares the Random Forest model's flood risk predictions against the actual labeled values stored in the database.</p>
-  <button class="action-btn btn-cyan" onclick="loadAvp()">📊 Load Comparison Results</button>
-  <div id="avpContent"></div>
-</div>
-
-<!-- ══════════════ THRESHOLD PANEL ══════════════ -->
+<!-- ── THRESHOLD PANEL ── -->
 <div class="side-panel" id="threshPanel">
   <div class="panel-header">
     <div class="panel-title">Flood Thresholds</div>
     <span class="panel-close" onclick="closePanel('threshPanel')">✕</span>
   </div>
-  <div class="section-title">Water Level (cm)</div>
+
+  <div class="thresh-section-title">Water Level (cm)</div>
   <div class="thresh-row"><span class="thresh-label">Low risk</span><span class="chip chip-low">&lt; 80 cm</span></div>
-  <div class="thresh-row"><span class="thresh-label">Moderate risk</span><span class="chip chip-mod">80–150 cm</span></div>
+  <div class="thresh-row"><span class="thresh-label">Moderate risk</span><span class="chip chip-moderate">80 – 150 cm</span></div>
   <div class="thresh-row"><span class="thresh-label">High risk</span><span class="chip chip-high">&gt; 150 cm</span></div>
-  <div class="section-title">Rainfall — 3h Accumulation</div>
+
+  <div class="thresh-section-title">Rainfall — 3-hour Accumulation</div>
   <div class="thresh-row"><span class="thresh-label">Low risk</span><span class="chip chip-low">&lt; 30 mm</span></div>
-  <div class="thresh-row"><span class="thresh-label">Moderate risk</span><span class="chip chip-mod">30–60 mm</span></div>
+  <div class="thresh-row"><span class="thresh-label">Moderate risk</span><span class="chip chip-moderate">30 – 60 mm</span></div>
   <div class="thresh-row"><span class="thresh-label">High risk</span><span class="chip chip-high">&gt; 60 mm</span></div>
-  <div class="section-title">Flow Rate</div>
-  <div class="thresh-row"><span class="thresh-label">Moderate trigger</span><span class="chip chip-mod">&gt; 3.0 L</span></div>
-  <div class="section-title">Rise Rate (cm/reading)</div>
+
+  <div class="thresh-section-title">Flow Rate</div>
+  <div class="thresh-row"><span class="thresh-label">Moderate trigger</span><span class="chip chip-moderate">&gt; 3.0 L</span></div>
+
+  <div class="thresh-section-title">Rise Rate (cm/reading)</div>
   <div class="thresh-row"><span class="thresh-label">High trigger</span><span class="chip chip-high">&gt; 10 cm + WL &gt; 100</span></div>
-  <div class="thresh-source">Based on PAGASA rainfall warning thresholds and Mandaue City DRRMO flood guidelines. ML model trained on 2020–2024 Mactan Station data from DOST-PAGASA.</div>
+
+  <div class="thresh-source">
+    Based on PAGASA rainfall warning thresholds and Mandaue City flood guidelines.
+    ML model trained on 2020–2024 Mactan Station data from DOST-PAGASA.
+  </div>
 </div>
 
-<!-- ══════════════ ML PANEL ══════════════ -->
+<!-- ── ML MODEL PANEL ── -->
 <div class="side-panel" id="mlPanel">
   <div class="panel-header">
     <div class="panel-title">Prediction Model</div>
     <span class="panel-close" onclick="closePanel('mlPanel')">✕</span>
   </div>
-  <div class="ml-status-box">
+
+  <div class="ml-status-row">
     <div class="ml-icon">🌲</div>
     <div>
-      <div class="ml-st" id="mlStatusTitle" style="color:#22c55e">Random Forest Active</div>
-      <div class="ml-sub" id="mlStatusSub">ML model loaded and predicting</div>
+      <div class="ml-status-title" id="mlStatusTitle" style="color:#22c55e">Random Forest Active</div>
+      <div class="ml-status-sub" id="mlStatusSub">ML model loaded and predicting</div>
     </div>
   </div>
-  <div class="ml-row"><span class="ml-key">Algorithm</span><span class="ml-val">Random Forest Classifier</span></div>
-  <div class="ml-row"><span class="ml-key">Trees</span><span class="ml-val">300 estimators</span></div>
-  <div class="ml-row"><span class="ml-key">Max depth</span><span class="ml-val">10 levels</span></div>
-  <div class="ml-row"><span class="ml-key">Training data</span><span class="ml-val">PAGASA 2020–2024</span></div>
-  <div class="ml-row"><span class="ml-key">Training samples</span><span class="ml-val">1,461 daily records</span></div>
-  <div class="ml-row"><span class="ml-key">Model accuracy</span><span class="ml-val" style="color:#22c55e">99%</span></div>
-  <div class="ml-row"><span class="ml-key">Output classes</span><span class="ml-val">Low / Moderate / High</span></div>
-  <div class="ml-row"><span class="ml-key">Fallback</span><span class="ml-val">Rule-based thresholds</span></div>
-  <div class="ml-row"><span class="ml-key">Current mode</span><span class="ml-val" id="mlCurrentMode" style="color:#22c55e">ML Model</span></div>
-  <div class="section-title" style="margin-top:0.85rem">Feature Importances</div>
-  <div class="feat-row"><span class="feat-k">rain_3h</span><span class="feat-p">62.9%</span></div>
-  <div class="feat-bg"><div class="feat-fill" style="width:62.9%"></div></div>
-  <div class="feat-row"><span class="feat-k">total_rain</span><span class="feat-p">33.4%</span></div>
-  <div class="feat-bg"><div class="feat-fill" style="width:33.4%"></div></div>
-  <div class="feat-row"><span class="feat-k">month</span><span class="feat-p">3.8%</span></div>
-  <div class="feat-bg"><div class="feat-fill" style="width:3.8%"></div></div>
-  <div class="feat-row"><span class="feat-k">water_level</span><span class="feat-p">0%</span></div>
-  <div class="feat-bg"><div class="feat-fill" style="width:0%"></div></div>
-  <div class="feat-row"><span class="feat-k">flow_rate</span><span class="feat-p">0%</span></div>
-  <div class="feat-bg"><div class="feat-fill" style="width:0%"></div></div>
+
+  <div class="ml-row"><span class="ml-key">Algorithm</span><span class="ml-value">Random Forest Classifier</span></div>
+  <div class="ml-row"><span class="ml-key">Number of trees</span><span class="ml-value">300 estimators</span></div>
+  <div class="ml-row"><span class="ml-key">Max depth</span><span class="ml-value">10 levels</span></div>
+  <div class="ml-row"><span class="ml-key">Training data</span><span class="ml-value">PAGASA 2020–2024</span></div>
+  <div class="ml-row"><span class="ml-key">Training samples</span><span class="ml-value">1,461 daily records</span></div>
+  <div class="ml-row"><span class="ml-key">Model accuracy</span><span class="ml-value" style="color:#22c55e">99%</span></div>
+  <div class="ml-row"><span class="ml-key">Output classes</span><span class="ml-value">Low / Moderate / High</span></div>
+  <div class="ml-row"><span class="ml-key">Fallback mode</span><span class="ml-value">Rule-based thresholds</span></div>
+  <div class="ml-row"><span class="ml-key">Current mode</span><span class="ml-value" id="mlCurrentMode" style="color:#22c55e">ML Model</span></div>
+
+  <div class="thresh-section-title" style="margin-top:1rem">Feature Importances</div>
+
+  <div class="feat-label-row"><span class="feat-key">rain_3h</span><span class="feat-pct">62.9%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:62.9%"></div></div>
+
+  <div class="feat-label-row"><span class="feat-key">total_rain</span><span class="feat-pct">33.4%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:33.4%"></div></div>
+
+  <div class="feat-label-row"><span class="feat-key">month</span><span class="feat-pct">3.8%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:3.8%"></div></div>
+
+  <div class="feat-label-row"><span class="feat-key">water_level</span><span class="feat-pct">0%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:0%"></div></div>
+
+  <div class="feat-label-row"><span class="feat-key">flow_rate</span><span class="feat-pct">0%</span></div>
+  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:0%"></div></div>
 </div>
 
-<!-- ══════════════ SCRIPTS ══════════════ -->
+<!-- ── SAFE ROUTES PANEL ── -->
+<div class="side-panel" id="routePanel">
+  <div class="panel-header">
+    <div class="panel-title">Safe Route Recommendations</div>
+    <span class="panel-close" onclick="closePanel('routePanel')">✕</span>
+  </div>
+
+  <p class="route-intro">
+    Based on current flood risk at both bridges, FloodGuide recommends the safest
+    crossing routes for Mandaue–Mactan. Updated every 30 minutes from live sensor data.
+  </p>
+
+  <div class="route-select-label">Your Location</div>
+  <select class="route-select" id="routeOrigin">
+    <option value="mandaue">Mandaue City Side</option>
+    <option value="mactan">Mactan / Lapu-Lapu Side</option>
+  </select>
+
+  <button class="route-btn" onclick="getRouteRecommendations()">
+    🔍 Get Safe Route Recommendations
+  </button>
+
+  <div id="routeResults">
+    <div class="route-empty">Select your location and tap the button above.</div>
+  </div>
+</div>
+
+<!-- ── SCRIPTS ── -->
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/leaflet-routing-machine.min.js"></script>
 <script src="{{ url_for('static', filename='js/map.js') }}"></script>
 
 <script>
-// ══════════════════════════════════════════
-// MAP INIT
-// ══════════════════════════════════════════
-const map = L.map('map', { zoomControl: true }).setView([10.315, 123.960], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors'
-}).addTo(map);
-
-// ══════════════════════════════════════════
-// BRIDGE / LOCATION COORDINATES
-// ══════════════════════════════════════════
-const BRIDGES = {
-  bridge1: { latlng: L.latLng(10.3265, 123.9521), name: 'Mandaue-Mactan Bridge 1' },
-  bridge2: { latlng: L.latLng(10.3350, 123.9605), name: 'Marcelo Fernan Bridge'   },
-  cclex:   { latlng: L.latLng(10.2650, 123.9820), name: 'CCLEX'                   },
-};
-
-// ══════════════════════════════════════════
-// PANEL SYSTEM
-// ══════════════════════════════════════════
-const PANELS = ['routePanel','simPanel','histPanel','avpPanel','threshPanel','mlPanel'];
+// ── PANEL SYSTEM ──
+const PANELS = ['threshPanel', 'mlPanel', 'routePanel'];
 
 function togglePanel(id) {
   const isOpen = document.getElementById(id).classList.contains('open');
   PANELS.forEach(p => document.getElementById(p).classList.remove('open'));
-  if (!isOpen) {
-    document.getElementById(id).classList.add('open');
-    if (id === 'histPanel') loadHistoricalEvents();
-  }
+  if (!isOpen) document.getElementById(id).classList.add('open');
 }
 
-function closePanel(id) { document.getElementById(id).classList.remove('open'); }
-map.on('click', () => PANELS.forEach(p => document.getElementById(p).classList.remove('open')));
+function closePanel(id) {
+  document.getElementById(id).classList.remove('open');
+}
 
-// ══════════════════════════════════════════
-// ML BADGE
-// ══════════════════════════════════════════
+// ── ML BADGE ──
 function updateMlBadge(isML) {
   const badge = document.getElementById('mlBadge');
   const text  = document.getElementById('mlBadgeText');
   const mode  = document.getElementById('mlCurrentMode');
   const title = document.getElementById('mlStatusTitle');
   const sub   = document.getElementById('mlStatusSub');
+
   if (isML) {
     badge.className = 'ml-badge ml-active';
-    text.textContent = 'Random Forest';
-    mode.textContent = 'ML Model'; mode.style.color = '#22c55e';
-    title.textContent = 'Random Forest Active'; title.style.color = '#22c55e';
-    sub.textContent = 'ML model loaded and predicting';
+    text.textContent  = 'Random Forest';
+    mode.textContent  = 'ML Model';
+    mode.style.color  = '#22c55e';
+    title.textContent = 'Random Forest Active';
+    title.style.color = '#22c55e';
+    sub.textContent   = 'ML model loaded and predicting';
   } else {
     badge.className = 'ml-badge ml-fallback';
-    text.textContent = 'Rule-Based';
-    mode.textContent = 'Fallback Rules'; mode.style.color = '#f59e0b';
-    title.textContent = 'Rule-Based Fallback'; title.style.color = '#f59e0b';
-    sub.textContent = 'ML not loaded — using threshold rules';
+    text.textContent  = 'Rule-Based';
+    mode.textContent  = 'Fallback Rules';
+    mode.style.color  = '#f59e0b';
+    title.textContent = 'Rule-Based Fallback';
+    title.style.color = '#f59e0b';
+    sub.textContent   = 'ML model not loaded — using threshold rules';
   }
 }
 
-// ══════════════════════════════════════════
-// MARKERS + MAP DATA
-// ══════════════════════════════════════════
-const markers = {};
+// ── SAFE ROUTES ──
+const ROUTES = {
+  mandaue: [
+    {
+      name: "Mandaue-Mactan Bridge 1 (Old Bridge)",
+      desc: "Via M.L. Quezon Highway → Osmena St → Bridge 1 → Mactan. Most direct route from Mandaue City proper.",
+      bridge: "bridge1"
+    },
+    {
+      name: "Marcelo Fernan Bridge (Bridge 2)",
+      desc: "Via N. Bacalso Ave → Bridge 2 → Lapu-Lapu City. Alternative if Bridge 1 area is at risk.",
+      bridge: "bridge2"
+    },
+    {
+      name: "Via Consolacion — Ferry (Emergency)",
+      desc: "Mandaue → Consolacion → Compostela → Danao Port → Ferry to Mactan. Only if both bridges are flooded.",
+      bridge: null,
+      alwaysSafe: true
+    }
+  ],
+  mactan: [
+    {
+      name: "Marcelo Fernan Bridge (Bridge 2)",
+      desc: "From Lapu-Lapu City via M.L. Quezon Hwy → Bridge 2 → Mandaue. Recommended first option.",
+      bridge: "bridge2"
+    },
+    {
+      name: "Mandaue-Mactan Bridge 1 (Old Bridge)",
+      desc: "Via Mactan Shrine Road → Bridge 1 → Mandaue City. Alternative route.",
+      bridge: "bridge1"
+    },
+    {
+      name: "Mactan-Cebu Ferry (Emergency)",
+      desc: "Lapu-Lapu Port → Pier 1 Cebu City. Use only if both bridges are impassable.",
+      bridge: null,
+      alwaysSafe: true
+    }
+  ]
+};
+
 let currentRiskData = {};
 
-function riskHex(c) { return {green:'#22c55e',orange:'#f59e0b',red:'#ef4444'}[c]||'#22c55e'; }
-
-function makeIcon(color) {
-  const c = riskHex(color);
-  return L.divIcon({
-    className: '',
-    html: `<div style="width:18px;height:18px;border-radius:50%;background:${c};border:3px solid #fff;box-shadow:0 0 0 2px ${c}60,0 2px 8px #0008"></div>`,
-    iconSize:[18,18], iconAnchor:[9,9], popupAnchor:[0,-12]
-  });
-}
-
-async function loadMapData() {
+async function fetchRiskLevels() {
   try {
     const res  = await fetch('/api/map-data');
     const data = await res.json();
     currentRiskData = {};
     data.locations.forEach(loc => {
       currentRiskData[loc.id] = loc.risk_color;
-      if (markers[loc.id]) {
-        markers[loc.id].setIcon(makeIcon(loc.risk_color));
-        markers[loc.id].getPopup().setContent(loc.popup_html);
-      } else {
-        markers[loc.id] = L.marker([loc.lat, loc.lng], { icon: makeIcon(loc.risk_color) })
-          .addTo(map)
-          .bindPopup(loc.popup_html, { maxWidth: 300 });
-      }
     });
+
+    // Detect ML vs rule-based
     const hasML = data.locations.some(loc => {
-      const m = (loc.popup_html||'').match(/[Cc]onfidence.*?([\d.]+)%/);
-      const c = parseFloat(m ? m[1] : '85');
-      return c !== 85.0 && c !== 75.0 && c !== 90.0;
+      const m = (loc.popup_html || '').match(/Confidence.*?([\d.]+)%/);
+      const conf = parseFloat(m ? m[1] : '85');
+      return conf !== 85.0 && conf !== 75.0 && conf !== 90.0;
     });
     updateMlBadge(hasML);
-  } catch(e) { console.warn('Map data error:', e); }
+
+  } catch(e) {
+    console.warn('Risk fetch error:', e);
+  }
 }
 
-loadMapData();
-setInterval(loadMapData, 30000);
-
-// ══════════════════════════════════════════
-// REAL-WORLD ROUTING VIA OSRM
-// Uses Leaflet Routing Machine — real roads,
-// flood-avoiding waypoint selection
-// ══════════════════════════════════════════
-let activeRoutingControls = [];
-let routeMarkers = [];
-
-function clearRoutes() {
-  activeRoutingControls.forEach(c => map.removeControl(c));
-  activeRoutingControls = [];
-  routeMarkers.forEach(m => map.removeLayer(m));
-  routeMarkers = [];
-  document.getElementById('routeResults').innerHTML =
-    '<div class="route-empty">Routes cleared.</div>';
+function riskLevel(color) {
+  if (color === 'red')    return 2;
+  if (color === 'orange') return 1;
+  return 0;
 }
 
-function riskLevel(bridgeId) {
-  const c = currentRiskData[bridgeId] || 'green';
-  return c === 'red' ? 2 : c === 'orange' ? 1 : 0;
-}
-
-function makePlanMarker(latlng, label, color) {
-  const m = L.marker(latlng, {
-    icon: L.divIcon({
-      className: '',
-      html: `<div style="background:${color};color:#fff;font-size:0.6rem;font-weight:700;padding:3px 7px;border-radius:5px;white-space:nowrap;box-shadow:0 2px 6px #0006">${label}</div>`,
-      iconAnchor: [0, 0]
-    })
-  }).addTo(map);
-  routeMarkers.push(m);
-  return m;
-}
-
-function addRoute(from, via, to, color, label) {
-  const waypoints = via
-    ? [L.latLng(from), L.latLng(via), L.latLng(to)]
-    : [L.latLng(from), L.latLng(to)];
-
-  const control = L.Routing.control({
-    waypoints,
-    router: L.Routing.osrmv1({
-      serviceUrl: 'https://router.project-osrm.org/route/v1',
-      profile: 'driving'
-    }),
-    lineOptions: {
-      styles: [{ color, weight: 5, opacity: 0.85 }],
-      extendToWaypoints: true,
-      missingRouteTolerance: 0
-    },
-    createMarker: () => null,   // we handle markers ourselves
-    addWaypoints: false,
-    draggableWaypoints: false,
-    fitSelectedRoutes: true,
-    showAlternatives: false,
-    show: false,                // hide default turn-by-turn panel
-  }).addTo(map);
-
-  activeRoutingControls.push(control);
-
-  control.on('routesfound', e => {
-    const route   = e.routes[0];
-    const dist    = (route.summary.totalDistance / 1000).toFixed(1);
-    const mins    = Math.round(route.summary.totalTime / 60);
-    const status  = document.getElementById('routeResults');
-    status.innerHTML += `
-    <div class="route-card" style="border-left-color:${color}">
-      <div class="route-name" style="color:${color}">${label}</div>
-      <div class="route-desc">Distance: ${dist} km · Est. travel time: ${mins} min</div>
-    </div>`;
-  });
-
-  control.on('routingerror', () => {
-    document.getElementById('routeResults').innerHTML +=
-      `<div class="route-card danger"><div class="route-desc">Could not compute route via ${label}.</div></div>`;
-  });
-}
-
-async function planRoute() {
-  clearRoutes();
+function getRouteRecommendations() {
+  const origin  = document.getElementById('routeOrigin').value;
+  const routes  = ROUTES[origin];
   const results = document.getElementById('routeResults');
-  results.innerHTML = '<div class="route-empty">Computing routes...</div>';
+  const ranks   = ['1st choice', '2nd choice', 'Emergency only'];
+  let html = '';
 
-  const fromVal = document.getElementById('routeFrom').value.split(',').map(Number);
-  const toVal   = document.getElementById('routeTo').value.split(',').map(Number);
-  const from    = [fromVal[0], fromVal[1]];
-  const to      = [toVal[0],   toVal[1]];
+  routes.forEach((route, i) => {
+    let statusClass = 'status-safe';
+    let statusLabel = 'SAFE TO USE';
+    let cardClass   = '';
 
-  const b1Risk = riskLevel('bridge1');
-  const b2Risk = riskLevel('bridge2');
-
-  // Determine available crossings and priority order
-  const crossings = [
-    { id: 'bridge1', name: 'Mandaue-Mactan Bridge 1',      via: [10.3265, 123.9521], color: '#38bdf8', risk: b1Risk },
-    { id: 'bridge2', name: 'Marcelo Fernan Bridge (Bridge 2)', via: [10.3350, 123.9605], color: '#a855f7', risk: b2Risk },
-    { id: 'cclex',   name: 'CCLEX',                         via: [10.2650, 123.9820], color: '#22c55e', risk: 0  },
-  ];
-
-  // Sort: safe first, then by risk level
-  crossings.sort((a, b) => a.risk - b.risk);
-
-  // Add start / end markers
-  makePlanMarker(from, '📍 Start', '#38bdf8');
-  makePlanMarker(to,   '🏁 End',   '#22c55e');
-
-  results.innerHTML = '';
-
-  let routed = 0;
-  crossings.forEach(c => {
-    if (c.risk === 2) {
-      // Flooded — show warning card only, don't route through
-      results.innerHTML += `
-      <div class="route-card danger">
-        <div class="route-rank">Avoided — Flooded</div>
-        <div class="route-name">${c.name}</div>
-        <div class="route-desc">High flood risk detected. Route excluded from recommendations.</div>
-        <span class="route-status s-avoid">AVOID</span>
-      </div>`;
+    if (route.alwaysSafe) {
+      statusClass = 'status-caution';
+      statusLabel = 'LAST RESORT';
+      cardClass   = 'warning';
     } else {
-      addRoute(from, c.via, to, c.color, c.name);
-      routed++;
+      const rl = riskLevel(currentRiskData[route.bridge] || 'green');
+      if (rl === 2) {
+        statusClass = 'status-avoid'; statusLabel = 'AVOID — FLOODED'; cardClass = 'danger';
+      } else if (rl === 1) {
+        statusClass = 'status-caution'; statusLabel = 'USE WITH CAUTION'; cardClass = 'warning';
+      }
     }
+
+    html += `
+    <div class="route-card ${cardClass}">
+      <div class="route-rank">${ranks[i]}</div>
+      <div class="route-name">${route.name}</div>
+      <div class="route-desc">${route.desc}</div>
+      <span class="route-status ${statusClass}">${statusLabel}</span>
+    </div>`;
   });
 
-  if (routed === 0) {
-    results.innerHTML = `
-    <div class="route-card danger">
-      <div class="route-name" style="color:#ef4444">⚠️ All Crossings Flooded</div>
-      <div class="route-desc">Both monitored bridges are High risk. Do not attempt to cross. Wait for conditions to improve or seek emergency assistance.</div>
+  // Overall advice banner
+  const b1 = riskLevel(currentRiskData['bridge1'] || 'green');
+  const b2 = riskLevel(currentRiskData['bridge2'] || 'green');
+
+  if (b1 === 2 && b2 === 2) {
+    html += `<div class="route-card danger" style="margin-top:0.5rem">
+      <div class="route-name" style="color:#ef4444">⚠️ Both Bridges — High Risk</div>
+      <div class="route-desc">Both bridges are currently High flood risk. Do not attempt to cross. Use ferry or wait for conditions to improve.</div>
+    </div>`;
+  } else if (b1 === 0 && b2 === 0) {
+    html += `<div class="route-card" style="margin-top:0.5rem">
+      <div class="route-name" style="color:#22c55e">✅ Conditions Clear</div>
+      <div class="route-desc">Both bridges are currently safe. Conditions are updated every 30 minutes.</div>
     </div>`;
   }
 
-  // CCLEX note if both bridges flooded
-  if (b1Risk === 2 && b2Risk === 2) {
-    results.innerHTML += `
-    <div class="route-card warn" style="margin-top:0.5rem">
-      <div class="route-name">💡 Use CCLEX as Alternative</div>
-      <div class="route-desc">No flood sensor is deployed at CCLEX. Proceed only if road conditions are confirmed safe. CCLEX connects Cebu City (SRP) to Cordova.</div>
-    </div>`;
-  }
+  results.innerHTML = html;
 }
 
-// ══════════════════════════════════════════
-// SIMULATION
-// ══════════════════════════════════════════
-async function simulate(level) {
-  const status = document.getElementById('simStatus');
-  const banner = document.getElementById('simBanner');
-  status.className = 'sim-status';
-
-  try {
-    await fetch('/api/simulate', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({level})
-    });
-
-    if (level === 'reset') {
-      banner.classList.remove('visible');
-      status.className = 'sim-status show';
-      status.style.cssText = 'background:#22c55e20;color:#22c55e';
-      status.textContent = '✅ Reset to live sensor data';
-    } else {
-      banner.classList.add('visible');
-      const bg = {low:'#22c55e20',moderate:'#f59e0b20',high:'#ef444420'};
-      const fg = {low:'#22c55e',  moderate:'#f59e0b',  high:'#ef4444' };
-      status.className = 'sim-status show';
-      status.style.cssText = `background:${bg[level]};color:${fg[level]}`;
-      status.textContent = `🎭 Simulating ${level.toUpperCase()} risk — map updating...`;
-    }
-    setTimeout(loadMapData, 800);
-  } catch(e) {
-    status.className = 'sim-status show';
-    status.style.cssText = 'background:#ef444420;color:#ef4444';
-    status.textContent = '❌ Error: ' + e.message;
-  }
-}
-
-// ══════════════════════════════════════════
-// HISTORICAL EVENTS
-// ══════════════════════════════════════════
-async function loadHistoricalEvents() {
-  const list = document.getElementById('histList');
-  list.innerHTML = '<div class="hist-empty">Loading...</div>';
-  try {
-    const res  = await fetch('/api/historical-events');
-    const data = await res.json();
-
-    if (!data.events || data.events.length === 0) {
-      list.innerHTML = `<div class="hist-empty">No Moderate/High events in database yet.<br><br>
-        Try using 🎭 Simulate to create sample events, then label them in PHPMyAdmin.</div>`;
-      return;
-    }
-
-    const riskBg = {Low:'#22c55e20',Moderate:'#f59e0b20',High:'#ef444420'};
-    const riskFg = {Low:'#22c55e',  Moderate:'#f59e0b',  High:'#ef4444' };
-
-    list.innerHTML = data.events.map(e => `
-    <div class="hist-item" id="hist-${e.id}" onclick="replayEvent(${e.id}, this)">
-      <span class="hist-risk" style="background:${riskBg[e.risk_label]};color:${riskFg[e.risk_label]}">${e.risk_label}</span>
-      <div class="hist-ts">${new Date(e.timestamp).toLocaleString('en-PH')}</div>
-      <div class="hist-vals">
-        📏 ${parseFloat(e.water_level||0).toFixed(1)} cm &nbsp;
-        🌧 ${parseFloat(e.total_rain||0).toFixed(1)} mm &nbsp;
-        📟 ${e.device_id}
-      </div>
-    </div>`).join('');
-
-  } catch(e) {
-    list.innerHTML = '<div class="hist-empty">Failed: ' + e.message + '</div>';
-  }
-}
-
-async function replayEvent(id, el) {
-  document.querySelectorAll('.hist-item').forEach(i => i.classList.remove('replaying'));
-  el.classList.add('replaying');
-  try {
-    const res  = await fetch('/api/replay-event', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({id})
-    });
-    const data = await res.json();
-    const ts   = new Date(data.timestamp).toLocaleString('en-PH');
-    const banner = document.getElementById('simBanner');
-    banner.classList.add('visible');
-    banner.textContent = `📅 REPLAYING: ${ts} · WL ${data.water_level.toFixed(1)} cm — Click to reset`;
-    setTimeout(loadMapData, 800);
-  } catch(e) { console.error('Replay error:', e); }
-}
-
-// ══════════════════════════════════════════
-// ACTUAL VS PREDICTED
-// ══════════════════════════════════════════
-async function loadAvp() {
-  const content = document.getElementById('avpContent');
-  content.innerHTML = '<div class="hist-empty">Running model comparison...</div>';
-  try {
-    const res  = await fetch('/api/actual-vs-predicted');
-    const data = await res.json();
-
-    if (data.error) { content.innerHTML = `<div class="hist-empty">❌ ${data.error}</div>`; return; }
-
-    const accColor = data.accuracy >= 90 ? '#22c55e' : data.accuracy >= 70 ? '#f59e0b' : '#ef4444';
-    const c = data.confusion;
-    const riskColor = r => r==='High'?'#ef4444':r==='Moderate'?'#f59e0b':'#22c55e';
-
-    let rows = '';
-    data.rows.forEach(r => {
-      const ts = new Date(r.timestamp).toLocaleString('en-PH',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});
-      rows += `<tr>
-        <td>${ts}</td>
-        <td style="color:${riskColor(r.actual)};font-weight:600">${r.actual}</td>
-        <td style="color:${riskColor(r.predicted)};font-weight:600">${r.predicted}</td>
-        <td>${r.confidence}%</td>
-        <td class="${r.match?'match-y':'match-n'}">${r.match?'✓':'✗'}</td>
-      </tr>`;
-    });
-
-    content.innerHTML = `
-    <div class="accuracy-box">
-      <div class="accuracy-pct" style="color:${accColor}">${data.accuracy}%</div>
-      <div class="accuracy-lbl">Overall Accuracy</div>
-      <div class="accuracy-sub">${data.correct} correct out of ${data.total} predictions</div>
-    </div>
-
-    <div class="section-title">Correct Predictions by Class</div>
-    <div class="conf-grid">
-      <div class="conf-cell"><div class="conf-num" style="color:#22c55e">${c.low_correct}</div><div class="conf-lbl">Low ✓</div></div>
-      <div class="conf-cell"><div class="conf-num" style="color:#f59e0b">${c.mod_correct}</div><div class="conf-lbl">Moderate ✓</div></div>
-      <div class="conf-cell"><div class="conf-num" style="color:#ef4444">${c.high_correct}</div><div class="conf-lbl">High ✓</div></div>
-    </div>
-
-    <div class="section-title">Misclassifications</div>
-    <div class="conf-grid" style="margin-bottom:0.85rem">
-      <div class="conf-cell"><div class="conf-num" style="color:#64748b">${c.low_as_moderate+c.low_as_high}</div><div class="conf-lbl">Low wrong</div></div>
-      <div class="conf-cell"><div class="conf-num" style="color:#64748b">${c.mod_as_low+c.mod_as_high}</div><div class="conf-lbl">Mod wrong</div></div>
-      <div class="conf-cell"><div class="conf-num" style="color:#64748b">${c.high_as_low+c.high_as_moderate}</div><div class="conf-lbl">High wrong</div></div>
-    </div>
-
-    <div class="section-title">Last ${data.rows.length} Readings</div>
-    <div class="avp-table-wrap" style="margin-top:0.5rem">
-      <table class="avp-table">
-        <thead><tr><th>Time</th><th>Actual</th><th>Predicted</th><th>Conf</th><th>✓</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
-
-  } catch(e) {
-    content.innerHTML = '<div class="hist-empty">❌ Failed: ' + e.message + '</div>';
-  }
-}
+// Init
+fetchRiskLevels();
+setInterval(fetchRiskLevels, 30000);
 </script>
 </body>
 </html>
