@@ -29,6 +29,10 @@ def get_db_connection():
 # =========================================
 API_KEY    = "e2a8ee9c6e8ec237763497022a1309bb"
 MODEL_PATH = "model_class.pkl"
+GOOGLE_MAPS_API_KEY = os.getenv(
+    "GOOGLE_MAPS_API_KEY",
+    "AIzaSyBfyF6DofStbAoUKcG83eEBE72OpaLqTus"
+)
 
 # Separate in-memory state for each bridge
 latest_sensor_data = {
@@ -110,6 +114,10 @@ def get_recent_readings(device_id, n=6):
     except Exception as e:
         print(f"⚠️ Could not fetch readings for {device_id}: {e}")
         return []
+
+
+def using_demo_state():
+    return bool(simulation_mode.get("active"))
 
 # =========================================
 # GET WEATHER FORECAST FROM OPENWEATHERMAP
@@ -219,10 +227,13 @@ def run_prediction(features, clf):
 # =========================================
 def get_predictions(device_id, forecast_3h, forecast_6h, clf):
     sensor  = latest_sensor_data[device_id].copy()
-    history = get_recent_readings(device_id, 6)
+    history = [] if using_demo_state() else get_recent_readings(device_id, 6)
 
     # Compute rolling features from actual history
-    if len(history) >= 2:
+    if using_demo_state():
+        rain_3h = max(float(sensor.get("rain_3h", 0) or 0), float(sensor.get("rainfall", 0) or 0))
+        rise_rate = float(sensor.get("rise_rate", 0) or 0)
+    elif len(history) >= 2:
         rain_values  = [r["total_rain"]  for r in history]
         water_values = [r["water_level"] for r in history]
         rain_3h   = sum(rain_values[-3:]) if len(rain_values) >= 3 else sum(rain_values)
@@ -247,7 +258,8 @@ def get_predictions(device_id, forecast_3h, forecast_6h, clf):
         "rise_rate":   rise_rate,
         "month":       month
     }
-    current_risk, current_color, current_conf = run_prediction(current_features, clf)
+    prediction_model = None if using_demo_state() else clf
+    current_risk, current_color, current_conf = run_prediction(current_features, prediction_model)
 
     # ── PREDICTED RISK (3 hours from now) ──
     # Simulates what the sensor will look like in 3h
@@ -264,7 +276,7 @@ def get_predictions(device_id, forecast_3h, forecast_6h, clf):
         "rise_rate":   rise_rate + (forecast_3h * 0.1),
         "month":       month
     }
-    pred_risk, pred_color, pred_conf = run_prediction(predicted_features, clf)
+    pred_risk, pred_color, pred_conf = run_prediction(predicted_features, prediction_model)
 
     # ── PREDICTED RISK (6 hours from now) ──
     predicted_rain_6h = rain_3h + forecast_6h
@@ -278,7 +290,7 @@ def get_predictions(device_id, forecast_3h, forecast_6h, clf):
         "rise_rate":   rise_rate + (forecast_6h * 0.1),
         "month":       month
     }
-    pred_risk_6h, pred_color_6h, pred_conf_6h = run_prediction(predicted_features_6h, clf)
+    pred_risk_6h, pred_color_6h, pred_conf_6h = run_prediction(predicted_features_6h, prediction_model)
 
     return {
         "current_risk":  current_risk,
@@ -397,6 +409,196 @@ def estimate_subside_time(risk_level, sensor_data, preds):
             return "3\u20137 hours", "Significant flooding — typically subsides in 3\u20137 hours", "#ef4444"
 
 
+def build_location_payload(loc, clf, timestamp):
+    device_id = loc["id"]
+
+    weather      = get_weather_data(loc["lat"], loc["lng"])
+    temp         = weather["temp"]
+    humidity     = weather["humidity"]
+    forecast_3h  = weather["forecast_3h"]
+    forecast_6h  = weather["forecast_6h"]
+    preds        = get_predictions(device_id, forecast_3h, forecast_6h, clf)
+    trend_text, trend_color = trend_arrow(
+        preds["current_risk"], preds["pred_risk_3h"]
+    )
+
+    sensor = latest_sensor_data[device_id]
+    sub_display, sub_desc, sub_color = estimate_subside_time(
+        preds["pred_risk_3h"], sensor, preds
+    )
+    subside_display = (
+        f'<span style="color:{sub_color};font-weight:700">{sub_display}</span>'
+    )
+
+    def fc_label(mm):
+        if mm >= 10:
+            return (
+                f'<span style="color:#ef4444;font-weight:700">'
+                f'{mm:.2f} mm ⚠️ Heavy</span>'
+            )
+        if mm >= 2.5:
+            return (
+                f'<span style="color:#f59e0b;font-weight:700">'
+                f'{mm:.2f} mm ⚠️ Moderate</span>'
+            )
+        return f'<span style="color:#22c55e">{mm:.2f} mm (Light/None)</span>'
+
+    popup = f"""
+    <div style="font-size:13px; line-height:1.6;">
+        <b style="font-size:15px">{loc['name']}</b><br>
+        <span style="font-size:11px;color:#64748b">Sensor: {device_id}</span><br><br>
+
+        <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                        letter-spacing:0.06em;margin-bottom:4px">📍 Current Risk</div>
+            <b style="font-size:18px;color:{preds['current_color']}">
+                {preds['current_risk']} Risk
+            </b>
+            <span style="font-size:11px;color:#64748b;margin-left:6px">
+                {preds['current_conf']}% confidence
+            </span>
+        </div>
+
+        <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
+                    border-left:3px solid {preds['pred_color_3h']}">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                        letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 3 Hours</div>
+            <b style="font-size:16px;color:{preds['pred_color_3h']}">
+                {preds['pred_risk_3h']} Risk
+            </b>
+            <span style="font-size:11px;color:#64748b;margin-left:6px">
+                {preds['pred_conf_3h']}% confidence
+            </span><br>
+            <span style="font-size:11px;color:{trend_color}">
+                {trend_text}
+            </span>
+        </div>
+
+        <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
+                    border-left:3px solid {preds['pred_color_6h']}">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                        letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 6 Hours</div>
+            <b style="font-size:14px;color:{preds['pred_color_6h']}">
+                {preds['pred_risk_6h']} Risk
+            </b>
+            <span style="font-size:11px;color:#64748b;margin-left:6px">
+                {preds['pred_conf_6h']}% confidence
+            </span>
+        </div>
+
+        <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
+                    border-left:3px solid {sub_color}">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                        letter-spacing:0.06em;margin-bottom:4px">⏱ Estimated Flood Subside Time</div>
+            <b style="font-size:15px">{subside_display}</b><br>
+            <span style="font-size:11px;color:#94a3b8">{sub_desc}</span>
+        </div>
+
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
+            <b style="color:#e2e8f0">── Sensor Readings ──</b><br>
+            🌧 Rainfall (now): {sensor['rainfall']:.2f} mm<br>
+            🌧 Rainfall (3h):  {preds['rain_3h']:.2f} mm<br>
+            📏 Water Level:    {sensor['water_level']:.2f} cm<br>
+            📈 Rise Rate:      {preds['rise_rate']:.2f} cm/reading<br>
+            💧 Flow Rate:      {sensor['flow_rate']:.2f} L
+        </div>
+
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
+            <b style="color:#e2e8f0">── Weather Forecast ──</b><br>
+            🔮 Rain (next 3h): {fc_label(forecast_3h)}<br>
+            🔮 Rain (next 6h): {fc_label(forecast_6h)}<br>
+            🌡 Temperature:    {temp:.1f} °C<br>
+            💧 Humidity:       {humidity}%
+        </div>
+
+        <div style="font-size:10px;color:#475569;margin-top:6px">
+            🕒 Updated: {timestamp}<br>
+            🌲 Prediction: Random Forest + OpenWeatherMap Forecast
+        </div>
+    </div>
+    """
+
+    marker_color = preds["current_color"] if using_demo_state() else preds["pred_color_3h"]
+
+    return {
+        "id":               device_id,
+        "name":             loc["name"],
+        "lat":              loc["lat"],
+        "lng":              loc["lng"],
+        "risk_color":       marker_color,
+        "popup_html":       popup,
+        "current_risk":     preds["current_risk"],
+        "current_color":    preds["current_color"],
+        "current_conf":     preds["current_conf"],
+        "pred_risk_3h":     preds["pred_risk_3h"],
+        "pred_color_3h":    preds["pred_color_3h"],
+        "pred_conf_3h":     preds["pred_conf_3h"],
+        "pred_risk_6h":     preds["pred_risk_6h"],
+        "pred_color_6h":    preds["pred_color_6h"],
+        "pred_conf_6h":     preds["pred_conf_6h"],
+        "confidence":       preds["current_conf"],
+        "water_level":      sensor["water_level"],
+        "rainfall":         sensor["rainfall"],
+        "flow_rate":        sensor["flow_rate"],
+        "rise_rate":        preds["rise_rate"],
+        "rain_3h":          preds["rain_3h"],
+        "forecast_3h":      forecast_3h,
+        "forecast_6h":      forecast_6h,
+        "temperature":      temp,
+        "humidity":         humidity,
+        "subside_display":  sub_display,
+        "subside_desc":     sub_desc,
+        "subside_color":    sub_color,
+        "trend_text":       trend_text,
+        "trend_color":      trend_color,
+        "updated_at":       timestamp,
+    }
+
+
+def get_live_location_payloads():
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    clf = load_model()
+    payloads = [build_location_payload(loc, clf, timestamp) for loc in MONITORED_SITES]
+    return payloads, clf is not None
+
+
+def apply_sensor_row(device_id, row):
+    latest_sensor_data[device_id]["water_level"] = float(row.get("water_level") or 0)
+    latest_sensor_data[device_id]["rainfall"]    = float(row.get("total_rain") or 0)
+    latest_sensor_data[device_id]["flow_rate"]   = float(row.get("flow_rate") or 0)
+    flooded = int(row.get("flooded") or 0) if row.get("flooded") is not None else 0
+    latest_sensor_data[device_id]["rain_3h"]     = float(row.get("total_rain") or 0) * 2.5
+    latest_sensor_data[device_id]["rise_rate"]   = 6.0 if flooded >= 2 else (3.0 if flooded == 1 else 0.0)
+
+
+def get_latest_row_before(cursor, device_id, target_ts):
+    cursor.execute(
+        """
+        SELECT id, device_id, timestamp, total_rain, water_level, flow_rate, flooded
+        FROM sensor_readings
+        WHERE device_id = %s AND timestamp <= %s
+        ORDER BY timestamp DESC
+        LIMIT 1
+        """,
+        (device_id, target_ts)
+    )
+    row = cursor.fetchone()
+    if row:
+        return row
+
+    cursor.execute(
+        """
+        SELECT id, device_id, timestamp, total_rain, water_level, flow_rate, flooded
+        FROM sensor_readings
+        WHERE device_id = %s
+        ORDER BY timestamp ASC
+        LIMIT 1
+        """,
+        (device_id,)
+    )
+    return cursor.fetchone()
+
+
 # =========================================
 # AUTO-RETRAIN ENDPOINT
 # =========================================
@@ -502,137 +704,8 @@ def receive_sensor():
 # =========================================
 @app.route("/api/map-data")
 def map_data():
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    data_list = []
-    clf       = load_model()
-
-    for loc in MONITORED_SITES:
-        device_id = loc["id"]
-
-        # Get weather: temp, humidity, forecast rain
-        weather      = get_weather_data(loc["lat"], loc["lng"])
-        temp         = weather["temp"]
-        humidity     = weather["humidity"]
-        forecast_3h  = weather["forecast_3h"]
-        forecast_6h  = weather["forecast_6h"]
-
-        # Run both current + prediction
-        preds = get_predictions(device_id, forecast_3h, forecast_6h, clf)
-
-        # Trend arrow
-        trend_text, trend_color = trend_arrow(
-            preds["current_risk"], preds["pred_risk_3h"]
-        )
-
-        # Subside time estimate
-        sensor = latest_sensor_data[device_id]
-        sub_display, sub_desc, sub_color = estimate_subside_time(
-            preds["pred_risk_3h"], sensor, preds
-        )
-
-        subside_display = f'<span style="color:{sub_color};font-weight:700">{sub_display}</span>'
-
-        # Forecast label colors
-        def fc_label(mm):
-            if mm >= 10:  return f'<span style="color:#ef4444;font-weight:700">{mm:.2f} mm ⚠️ Heavy</span>'
-            elif mm >= 2.5: return f'<span style="color:#f59e0b;font-weight:700">{mm:.2f} mm ⚠️ Moderate</span>'
-            else:         return f'<span style="color:#22c55e">{mm:.2f} mm (Light/None)</span>'
-
-        popup = f"""
-        <div style="font-size:13px; line-height:1.6;">
-            <b style="font-size:15px">{loc['name']}</b><br>
-            <span style="font-size:11px;color:#64748b">Sensor: {device_id}</span><br><br>
-
-            <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px">
-                <div style="font-size:11px;color:#64748b;text-transform:uppercase;
-                            letter-spacing:0.06em;margin-bottom:4px">📍 Current Risk</div>
-                <b style="font-size:18px;color:{preds['current_color']}">
-                    {preds['current_risk']} Risk
-                </b>
-                <span style="font-size:11px;color:#64748b;margin-left:6px">
-                    {preds['current_conf']}% confidence
-                </span>
-            </div>
-
-            <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
-                        border-left:3px solid {preds['pred_color_3h']}">
-                <div style="font-size:11px;color:#64748b;text-transform:uppercase;
-                            letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 3 Hours</div>
-                <b style="font-size:16px;color:{preds['pred_color_3h']}">
-                    {preds['pred_risk_3h']} Risk
-                </b>
-                <span style="font-size:11px;color:#64748b;margin-left:6px">
-                    {preds['pred_conf_3h']}% confidence
-                </span><br>
-                <span style="font-size:11px;color:{trend_color}">
-                    {trend_text}
-                </span>
-            </div>
-
-            <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
-                        border-left:3px solid {preds['pred_color_6h']}">
-                <div style="font-size:11px;color:#64748b;text-transform:uppercase;
-                            letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 6 Hours</div>
-                <b style="font-size:14px;color:{preds['pred_color_6h']}">
-                    {preds['pred_risk_6h']} Risk
-                </b>
-                <span style="font-size:11px;color:#64748b;margin-left:6px">
-                    {preds['pred_conf_6h']}% confidence
-                </span>
-            </div>
-
-            <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
-                        border-left:3px solid {sub_color}">
-                <div style="font-size:11px;color:#64748b;text-transform:uppercase;
-                            letter-spacing:0.06em;margin-bottom:4px">⏱ Estimated Flood Subside Time</div>
-                <b style="font-size:15px">{subside_display}</b><br>
-                <span style="font-size:11px;color:#94a3b8">{sub_desc}</span>
-            </div>
-
-            <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
-                <b style="color:#e2e8f0">── Sensor Readings ──</b><br>
-                🌧 Rainfall (now): {sensor['rainfall']:.2f} mm<br>
-                🌧 Rainfall (3h):  {preds['rain_3h']:.2f} mm<br>
-                📏 Water Level:    {sensor['water_level']:.2f} cm<br>
-                📈 Rise Rate:      {preds['rise_rate']:.2f} cm/reading<br>
-                💧 Flow Rate:      {sensor['flow_rate']:.2f} L
-            </div>
-
-            <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
-                <b style="color:#e2e8f0">── Weather Forecast ──</b><br>
-                🔮 Rain (next 3h): {fc_label(forecast_3h)}<br>
-                🔮 Rain (next 6h): {fc_label(forecast_6h)}<br>
-                🌡 Temperature:    {temp:.1f} °C<br>
-                💧 Humidity:       {humidity}%
-            </div>
-
-            <div style="font-size:10px;color:#475569;margin-top:6px">
-                🕒 Updated: {timestamp}<br>
-                🌲 Prediction: Random Forest + OpenWeatherMap Forecast
-            </div>
-        </div>
-        """
-
-        # Map marker uses the PREDICTED 3h color so it warns BEFORE flood happens
-        marker_color = preds["pred_color_3h"]
-
-        data_list.append({
-            "id":              loc["id"],
-            "lat":             loc["lat"],
-            "lng":             loc["lng"],
-            "risk_color":      marker_color,   # marker shows predicted risk
-            "popup_html":      popup,
-            "current_risk":    preds["current_risk"],
-            "pred_risk_3h":    preds["pred_risk_3h"],
-            "confidence":      preds["current_conf"],
-            "water_level":     sensor["water_level"],
-            "rainfall":        sensor["rainfall"],
-            "flow_rate":       sensor["flow_rate"],
-            "rise_rate":       preds["rise_rate"],
-            "forecast_3h":     forecast_3h,
-        })
-
-    return jsonify({"locations": data_list})
+    locations, ml_active = get_live_location_payloads()
+    return jsonify({"locations": locations, "ml_active": ml_active})
 
 # =========================================
 # DASHBOARD PAGE + API
@@ -644,6 +717,8 @@ def dashboard():
 @app.route("/api/dashboard-data")
 def dashboard_data():
     try:
+        live_locations, ml_active = get_live_location_payloads()
+        live_by_bridge = {loc["id"]: loc for loc in live_locations}
         conn   = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
@@ -690,9 +765,15 @@ def dashboard_data():
         return jsonify({
             "bridge1": serialize(bridge1),
             "bridge2": serialize(bridge2),
+            "bridges": live_by_bridge,
             "recent":  serialize(recent),
             "stats":   {k: (float(v) if v is not None else 0)
-                        for k, v in stats.items()}
+                        for k, v in stats.items()},
+            "model": {
+                "ml_active": ml_active,
+                "mode_label": "Random Forest" if ml_active else "Threshold Rules",
+                "maps_key_loaded": bool(GOOGLE_MAPS_API_KEY)
+            }
         })
 
     except Exception as e:
@@ -702,9 +783,272 @@ def dashboard_data():
 # =========================================
 # MAIN PAGE
 # =========================================
+
+# =========================================
+# SIMULATE SENSOR DATA ENDPOINT
+# Injects fake sensor readings so the map
+# can demo Low / Moderate / High risk
+# =========================================
+SIMULATION_PRESETS = {
+    "low": {
+        "bridge1": {"water_level": 25.0,  "rainfall": 0.5,  "flow_rate": 0.1},
+        "bridge2": {"water_level": 22.0,  "rainfall": 0.3,  "flow_rate": 0.05},
+    },
+    "moderate": {
+        "bridge1": {"water_level": 95.0,  "rainfall": 18.0, "flow_rate": 2.5},
+        "bridge2": {"water_level": 88.0,  "rainfall": 16.0, "flow_rate": 2.1},
+    },
+    "high": {
+        "bridge1": {"water_level": 165.0, "rainfall": 38.0, "flow_rate": 5.2},
+        "bridge2": {"water_level": 158.0, "rainfall": 35.0, "flow_rate": 4.8},
+    },
+    "reset": {
+        "bridge1": {"water_level": 0.0,   "rainfall": 0.0,  "flow_rate": 0.0},
+        "bridge2": {"water_level": 0.0,   "rainfall": 0.0,  "flow_rate": 0.0},
+    }
+}
+
+simulation_mode = {"active": False, "level": None}
+
+@app.route("/api/simulate", methods=["POST"])
+def simulate():
+    data  = request.get_json()
+    level = data.get("level", "low").lower()
+
+    if level not in SIMULATION_PRESETS:
+        return jsonify({"error": f"Invalid level. Choose: {list(SIMULATION_PRESETS.keys())}"}), 400
+
+    preset = SIMULATION_PRESETS[level]
+
+    for device_id, values in preset.items():
+        latest_sensor_data[device_id]["water_level"] = values["water_level"]
+        latest_sensor_data[device_id]["rainfall"]    = values["rainfall"]
+        latest_sensor_data[device_id]["flow_rate"]   = values["flow_rate"]
+        # Reset rolling features so they recalculate from new values
+        latest_sensor_data[device_id]["rain_3h"]   = values["rainfall"] * 2.5
+        latest_sensor_data[device_id]["rise_rate"] = (
+            2.0 if level == "moderate" else (5.0 if level == "high" else 0.0)
+        )
+
+    simulation_mode["active"] = level != "reset"
+    simulation_mode["level"]  = level if level != "reset" else None
+
+    print(f"🎭 Simulation mode: {level}")
+    return jsonify({
+        "status":  "ok",
+        "level":   level,
+        "message": f"Simulating {level.upper()} flood risk on both bridges"
+    })
+
+@app.route("/api/simulation-status")
+def simulation_status():
+    return jsonify(simulation_mode)
+
+# =========================================
+# HISTORICAL EVENTS ENDPOINT
+# Returns past Moderate/High readings
+# from the database for replay
+# =========================================
+@app.route("/api/historical-events")
+def historical_events():
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Get replayable Moderate/High events, prioritizing actual bridge rows.
+        cursor.execute("""
+            SELECT
+                id, device_id, timestamp,
+                total_rain, water_level, flow_rate, flooded
+            FROM sensor_readings
+            WHERE flooded >= 1
+            ORDER BY
+                CASE WHEN device_id IN ('bridge1', 'bridge2') THEN 0 ELSE 1 END,
+                timestamp DESC
+            LIMIT 50
+        """)
+        events = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        serialized = []
+        for e in events:
+            row = dict(e)
+            if hasattr(row.get("timestamp"), "isoformat"):
+                row["timestamp"] = row["timestamp"].isoformat()
+            row["risk_label"] = ["Low", "Moderate", "High"][min(int(row["flooded"]), 2)]
+            serialized.append(row)
+
+        return jsonify({"events": serialized, "count": len(serialized)})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# =========================================
+# REPLAY HISTORICAL EVENT ENDPOINT
+# Injects a past event's sensor values
+# into the live system for demo/testing
+# =========================================
+@app.route("/api/replay-event", methods=["POST"])
+def replay_event():
+    data     = request.get_json()
+    event_id = data.get("id")
+
+    if not event_id:
+        return jsonify({"error": "No event id provided"}), 400
+
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT * FROM sensor_readings WHERE id = %s", (event_id,)
+        )
+        event = cursor.fetchone()
+
+        if not event:
+            cursor.close()
+            conn.close()
+            return jsonify({"error": "Event not found"}), 404
+
+        # Replay the selected event into both bridge markers so the map visibly
+        # reflects the chosen Moderate / High history item.
+        replay_rows = []
+        for bridge_id in latest_sensor_data:
+            replay_row = dict(event)
+            replay_row["device_id"] = bridge_id
+            apply_sensor_row(bridge_id, replay_row)
+            replay_rows.append({
+                "device_id": bridge_id,
+                "reading_id": replay_row["id"],
+                "timestamp": replay_row["timestamp"].isoformat() if hasattr(replay_row["timestamp"], "isoformat") else replay_row["timestamp"],
+                "water_level": float(replay_row["water_level"] or 0),
+                "total_rain": float(replay_row["total_rain"] or 0),
+                "flow_rate": float(replay_row["flow_rate"] or 0),
+                "flooded": int(replay_row["flooded"] or 0) if replay_row.get("flooded") is not None else 0
+            })
+
+        simulation_mode["active"] = True
+        simulation_mode["level"]  = f"replay:{event_id}"
+
+        ts = event["timestamp"]
+        if hasattr(ts, "isoformat"):
+            ts = ts.isoformat()
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "status":      "ok",
+            "device_id":   event.get("device_id", "bridge1"),
+            "timestamp":   ts,
+            "water_level": float(event["water_level"] or 0),
+            "total_rain":  float(event["total_rain"]  or 0),
+            "flow_rate":   float(event["flow_rate"]   or 0),
+            "flooded":     int(event["flooded"]       or 0),
+            "replayed":    replay_rows,
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# =========================================
+# ACTUAL VS PREDICTED ENDPOINT
+# Runs the ML model on historical DB rows
+# and compares to their stored labels
+# =========================================
+@app.route("/api/actual-vs-predicted")
+def actual_vs_predicted():
+    try:
+        conn = get_db_connection()
+        df   = pd.read_sql(
+            """SELECT id, timestamp, device_id, total_rain,
+                      water_level, flow_rate, flooded
+               FROM sensor_readings
+               WHERE flooded IS NOT NULL
+               ORDER BY timestamp DESC
+               LIMIT 200""",
+            conn
+        )
+        conn.close()
+
+        if df.empty:
+            return jsonify({"error": "No labelled data in database"}), 200
+
+        clf = load_model()
+        if clf is None:
+            return jsonify({"error": "Model not loaded"}), 500
+
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values("timestamp").reset_index(drop=True)
+        df["rain_3h"]   = df["total_rain"].rolling(window=3, min_periods=1).sum()
+        df["rise_rate"] = df["water_level"].diff().fillna(0)
+        df["month"]     = df["timestamp"].dt.month
+        df = df.fillna(0)
+
+        features = ["total_rain", "water_level", "flow_rate",
+                    "rain_3h", "rise_rate", "month"]
+
+        X            = df[features]
+        y_actual     = df["flooded"].astype(int)
+        y_predicted  = clf.predict(X)
+        y_proba      = clf.predict_proba(X)
+
+        label_map = {0: "Low", 1: "Moderate", 2: "High"}
+
+        # Compute metrics
+        correct   = int((y_actual.values == y_predicted).sum())
+        total     = len(y_actual)
+        accuracy  = round(correct / total * 100, 1)
+
+        # Confusion counts
+        conf = {
+            "low_correct":      int(((y_actual == 0) & (y_predicted == 0)).sum()),
+            "mod_correct":      int(((y_actual == 1) & (y_predicted == 1)).sum()),
+            "high_correct":     int(((y_actual == 2) & (y_predicted == 2)).sum()),
+            "low_as_moderate":  int(((y_actual == 0) & (y_predicted == 1)).sum()),
+            "low_as_high":      int(((y_actual == 0) & (y_predicted == 2)).sum()),
+            "mod_as_low":       int(((y_actual == 1) & (y_predicted == 0)).sum()),
+            "mod_as_high":      int(((y_actual == 1) & (y_predicted == 2)).sum()),
+            "high_as_low":      int(((y_actual == 2) & (y_predicted == 0)).sum()),
+            "high_as_moderate": int(((y_actual == 2) & (y_predicted == 1)).sum()),
+        }
+
+        # Sample rows for table display (last 30)
+        rows = []
+        df_tail = df.tail(30).copy()
+        preds_tail = y_predicted[-30:]
+        probas_tail = y_proba[-30:]
+
+        for i, (_, row) in enumerate(df_tail.iterrows()):
+            actual    = int(row["flooded"])
+            predicted = int(preds_tail[i])
+            conf_pct  = round(float(max(probas_tail[i])) * 100, 1)
+            rows.append({
+                "timestamp":  row["timestamp"].isoformat(),
+                "device_id":  row.get("device_id", "bridge1"),
+                "actual":     label_map.get(actual, "Low"),
+                "predicted":  label_map.get(predicted, "Low"),
+                "confidence": conf_pct,
+                "match":      actual == predicted,
+                "rain":       round(float(row["total_rain"]), 2),
+                "water_level":round(float(row["water_level"]), 2),
+            })
+
+        return jsonify({
+            "accuracy":   accuracy,
+            "correct":    correct,
+            "total":      total,
+            "confusion":  conf,
+            "rows":       rows,
+        })
+
+    except Exception as e:
+        print(f"❌ Actual vs Predicted error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/")
 def home():
-    return render_template("map.html")
+    return render_template("map.html", google_maps_api_key=GOOGLE_MAPS_API_KEY)
 
 # =========================================
 # RUN APP

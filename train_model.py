@@ -1,3 +1,18 @@
+"""
+import_pagasa_and_train.py
+────────────────────────────────────────────────────────
+Imports Mactan_Daily_Data.csv from DOST-PAGASA into
+Clever Cloud and retrains the flood risk model using
+real 2020-2024 rainfall data.
+
+Usage:
+    python import_pagasa_and_train.py
+
+Place Mactan_Daily_Data.csv in the same folder as this
+script before running.
+────────────────────────────────────────────────────────
+"""
+
 import pandas as pd
 import numpy as np
 import joblib
@@ -9,15 +24,13 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 import warnings
-
 warnings.filterwarnings("ignore")
 
 # =========================================
 # CONFIG
 # =========================================
-CSV_PATH = "Mactan_Daily_Data.csv"
+CSV_PATH   = "Mactan_Daily_Data.csv"
 MODEL_PATH = "model_class.pkl"
-
 
 def get_db_connection():
     return mysql.connector.connect(
@@ -29,7 +42,6 @@ def get_db_connection():
         connection_timeout=10,
         ssl_disabled=False
     )
-
 
 # =========================================
 # STEP 1 — LOAD AND CLEAN PAGASA CSV
@@ -52,9 +64,9 @@ def load_pagasa_csv():
     # Convert RAINFALL — handle special values
     df['RAINFALL'] = pd.to_numeric(df['RAINFALL'], errors='coerce')
     df['RAINFALL'] = df['RAINFALL'].apply(
-        lambda x: 0.05 if x == -1.0  # -1 = Trace (<0.1mm) → use 0.05
-        else (np.nan if x <= -999.0  # -999 = Missing → NaN
-              else x)
+        lambda x: 0.05 if x == -1.0    # -1 = Trace (<0.1mm) → use 0.05
+        else (np.nan if x <= -999.0    # -999 = Missing → NaN
+        else x)
     )
     df['RAINFALL'] = df['RAINFALL'].fillna(0).clip(lower=0)
 
@@ -71,7 +83,6 @@ def load_pagasa_csv():
     print(f"   Date range: {df['timestamp'].min().date()} → {df['timestamp'].max().date()}")
     return df
 
-
 # =========================================
 # STEP 2 — ENGINEER FEATURES AND LABELS
 # =========================================
@@ -79,11 +90,11 @@ def prepare_pagasa_features(df):
     print("\n🔧 Engineering features...")
 
     # Rolling rainfall sums (daily data, so window=3 = 3-day sum)
-    df['rain_3h'] = df['RAINFALL'].rolling(window=3, min_periods=1).sum()
-    df['rise_rate'] = 0.0  # PAGASA has no water level — use 0
+    df['rain_3h']  = df['RAINFALL'].rolling(window=3, min_periods=1).sum()
+    df['rise_rate'] = 0.0   # PAGASA has no water level — use 0
     df['water_level'] = 0.0
-    df['flow_rate'] = 0.0
-    df['month'] = df['MONTH']
+    df['flow_rate']   = 0.0
+    df['month']       = df['MONTH']
     df['subside_time'] = 0.0
 
     # ── FLOOD LABELING ──
@@ -94,7 +105,7 @@ def prepare_pagasa_features(df):
     # Source: PAGASA Rainfall Warning System
     def label_flood(row):
         rain = row['RAINFALL']
-        r3 = row['rain_3h']
+        r3   = row['rain_3h']
 
         # High risk — extreme/heavy rain or sustained 3-day accumulation
         if rain > 30 or r3 > 60:
@@ -112,15 +123,14 @@ def prepare_pagasa_features(df):
 
     # Print distribution
     counts = df['flooded'].value_counts().sort_index()
-    total = len(df)
+    total  = len(df)
     print(f"\n📊 Label distribution (from real PAGASA thresholds):")
-    print(f"   Low  (0): {counts.get(0, 0):4d} days ({counts.get(0, 0) / total * 100:.1f}%)")
-    print(f"   Mod  (1): {counts.get(1, 0):4d} days ({counts.get(1, 0) / total * 100:.1f}%)")
-    print(f"   High (2): {counts.get(2, 0):4d} days ({counts.get(2, 0) / total * 100:.1f}%)")
+    print(f"   Low  (0): {counts.get(0,0):4d} days ({counts.get(0,0)/total*100:.1f}%)")
+    print(f"   Mod  (1): {counts.get(1,0):4d} days ({counts.get(1,0)/total*100:.1f}%)")
+    print(f"   High (2): {counts.get(2,0):4d} days ({counts.get(2,0)/total*100:.1f}%)")
     print(f"   Total:    {total} days")
 
     return df
-
 
 # =========================================
 # STEP 3 — IMPORT INTO DATABASE
@@ -129,7 +139,7 @@ def import_to_db(df):
     print("\n💾 Importing PAGASA data into Clever Cloud database...")
 
     try:
-        conn = get_db_connection()
+        conn   = get_db_connection()
         cursor = conn.cursor()
 
         # Add device_id column if missing
@@ -160,7 +170,7 @@ def import_to_db(df):
 
         # Insert all rows
         inserted = 0
-        errors = 0
+        errors   = 0
 
         for _, row in df.iterrows():
             try:
@@ -170,11 +180,11 @@ def import_to_db(df):
                         flow_rate, flooded, subside_time)
                        VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                     (
-                        'pagasa',  # mark as PAGASA data
+                        'pagasa',                    # mark as PAGASA data
                         row['timestamp'],
                         float(row['RAINFALL']),
-                        float(row['water_level']),  # 0.0 — not in PAGASA data
-                        float(row['flow_rate']),  # 0.0 — not in PAGASA data
+                        float(row['water_level']),   # 0.0 — not in PAGASA data
+                        float(row['flow_rate']),     # 0.0 — not in PAGASA data
                         int(row['flooded']),
                         float(row['subside_time'])
                     )
@@ -194,7 +204,6 @@ def import_to_db(df):
         print(f"   ❌ DB connection failed: {e}")
         print("   ⚠️  Training locally only (model will still be saved)")
         return False
-
 
 # =========================================
 # STEP 4 — TRAIN MODEL
@@ -221,7 +230,7 @@ def train_model(df):
     clf = RandomForestClassifier(
         n_estimators=300,
         max_depth=10,
-        class_weight="balanced",  # handles class imbalance
+        class_weight="balanced",   # handles class imbalance
         random_state=42,
         n_jobs=-1
     )
@@ -247,7 +256,6 @@ def train_model(df):
     print(f"   Trained on: {len(X_train)} samples | Tested on: {len(X_test)} samples")
 
     return clf
-
 
 # =========================================
 # MAIN

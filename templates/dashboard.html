@@ -1,663 +1,589 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FloodGuide — Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<style>
-  :root {
-    --bg:        #0b0f1a;
-    --surface:   #111827;
-    --surface2:  #1a2235;
-    --border:    #1f2d45;
-    --text:      #e2e8f0;
-    --muted:     #64748b;
-    --accent:    #38bdf8;
-    --low:       #22c55e;
-    --moderate:  #f59e0b;
-    --high:      #ef4444;
-    --font-mono: 'Space Mono', monospace;
-    --font-sans: 'DM Sans', sans-serif;
-  }
+  <title>FloodGuide – Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',sans-serif;background:#0a0f1e;color:#e2e8f0;min-height:100vh}
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+    /* ── TOPBAR ── */
+    .topbar{height:56px;background:rgba(15,23,42,.97);border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;padding:0 2rem;position:sticky;top:0;z-index:100}
+    .logo{font-size:.95rem;font-weight:700;color:#38bdf8;letter-spacing:.06em}
+    .logo span{color:#334155;font-weight:400}
+    .topbar-right{display:flex;align-items:center;gap:.5rem}
+    .live-dot-wrap{display:flex;align-items:center;gap:.4rem;font-size:.65rem;font-weight:600;color:#22c55e;text-transform:uppercase;letter-spacing:.08em}
+    .live-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;animation:blink 2s infinite}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+    .tnav{display:flex;align-items:center;gap:.3rem}
+    .tbtn{padding:.3rem .7rem;border-radius:6px;font-size:.7rem;font-weight:500;text-decoration:none;border:1px solid #1e293b;background:transparent;color:#64748b;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap}
+    .tbtn:hover{background:#1e293b;color:#e2e8f0;border-color:#334155}
+    .tbtn.active{background:#38bdf820;border-color:#38bdf860;color:#38bdf8}
+    .tbtn.thresh{background:#f59e0b18;border-color:#f59e0b60;color:#f59e0b}
+    .tbtn.thresh:hover{background:#f59e0b28}
+    .tbtn.rfbtn{background:#22c55e18;border-color:#22c55e60;color:#22c55e}
+    .tbtn.rfbtn:hover{background:#22c55e28}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-sans);
-    min-height: 100vh;
-  }
+    /* ── LAYOUT ── */
+    .page{max-width:1280px;margin:0 auto;padding:2rem}
+    .page-title{font-size:.65rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.12em;margin-bottom:1.5rem}
 
-  /* ── HEADER ── */
-  header {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 0 2rem;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
+    /* ── BRIDGE CARDS ── */
+    .bridge-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem}
+    @media(max-width:768px){.bridge-grid{grid-template-columns:1fr}}
+    .bridge-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:1.4rem;position:relative;overflow:hidden}
+    .bridge-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+    .bridge-card.low::before{background:#22c55e}
+    .bridge-card.moderate::before{background:#f59e0b}
+    .bridge-card.high::before{background:#ef4444;animation:pulseBar 1.5s infinite}
+    @keyframes pulseBar{0%,100%{opacity:1}50%{opacity:.5}}
+    .bridge-name{font-size:.62rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.5rem}
+    .risk-row{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:.75rem}
+    .risk-label{font-size:1.8rem;font-weight:700;line-height:1}
+    .risk-low{color:#22c55e}.risk-moderate{color:#f59e0b}.risk-high{color:#ef4444}
+    .risk-trend{font-size:.68rem;font-weight:700;white-space:nowrap;padding:.28rem .55rem;border-radius:999px;background:#0a0f1e;color:#94a3b8}
+    .pill-row{display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.8rem}
+    .pill{background:#0a0f1e;border:1px solid #1e293b;border-radius:999px;padding:.28rem .6rem;font-size:.62rem;color:#94a3b8}
+    .pill b{color:#e2e8f0;font-weight:600}
+    .sensor-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;margin-bottom:.6rem}
+    @media(max-width:960px){.sensor-grid{grid-template-columns:1fr 1fr}}
+    .sensor-item{background:#0a0f1e;border-radius:8px;padding:.6rem .8rem}
+    .sensor-lbl{font-size:.55rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.25rem}
+    .sensor-val{font-size:1rem;font-weight:600;color:#38bdf8;line-height:1}
+    .sensor-unit{font-size:.6rem;color:#475569;margin-left:.2rem}
+    .card-footer{font-size:.6rem;color:#334155;margin-top:.5rem;line-height:1.6}
 
-  .logo {
-    font-family: var(--font-mono);
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--accent);
-    letter-spacing: 0.05em;
-    text-decoration: none;
-  }
+    /* ── STAT CARDS ── */
+    .stats-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:1rem;margin-bottom:1.5rem}
+    @media(max-width:1024px){.stats-grid{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:640px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
+    .stat-card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:1rem 1.1rem}
+    .stat-lbl{font-size:.55rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.4rem}
+    .stat-val{font-size:1.6rem;font-weight:700;line-height:1;color:#e2e8f0}
+    .stat-sub{font-size:.6rem;color:#334155;margin-top:.2rem}
+    .stat-high{color:#ef4444}.stat-mod{color:#f59e0b}.stat-blue{color:#38bdf8}
 
-  .logo span { color: var(--muted); font-weight: 400; }
+    /* ── CHARTS ── */
+    .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem}
+    @media(max-width:900px){.charts-grid{grid-template-columns:1fr}}
+    .chart-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:1.2rem}
+    .chart-title{font-size:.62rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:1rem}
+    .chart-wrap{position:relative;height:180px}
 
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
-  }
+    /* ── RECENT TABLE ── */
+    .table-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:1.2rem;margin-bottom:1.5rem}
+    .table-title{font-size:.62rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.85rem}
+    .data-table{width:100%;border-collapse:collapse;font-size:.68rem}
+    .data-table th{color:#334155;text-align:left;padding:.4rem .5rem;border-bottom:1px solid #1e293b;font-weight:500;text-transform:uppercase;letter-spacing:.05em;font-size:.55rem}
+    .data-table td{padding:.42rem .5rem;border-bottom:1px solid #0f172a80;color:#94a3b8}
+    .data-table tr:last-child td{border-bottom:none}
+    .data-table tr:hover td{background:#ffffff04}
+    .rbadge{display:inline-block;padding:.05rem .4rem;border-radius:4px;font-size:.58rem;font-weight:700}
+    .rb-low{background:#22c55e18;color:#22c55e}
+    .rb-moderate{background:#f59e0b18;color:#f59e0b}
+    .rb-high{background:#ef444418;color:#ef4444}
 
-  .live-badge {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.75rem;
-    font-family: var(--font-mono);
-    color: var(--low);
-  }
+    /* ── THRESHOLD MODAL ── */
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:none;align-items:center;justify-content:center}
+    .modal-overlay.open{display:flex}
+    .modal{background:#0f172a;border:1px solid #1e293b;border-radius:14px;padding:1.5rem;width:380px;max-width:90vw;max-height:85vh;overflow-y:auto}
+    .modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.1rem}
+    .modal-title{font-size:.7rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em}
+    .modal-close{cursor:pointer;color:#475569;font-size:1.2rem;transition:color .15s}
+    .modal-close:hover{color:#e2e8f0}
+    .thresh-sec{font-size:.6rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.06em;margin:.9rem 0 .35rem}
+    .thresh-row{display:flex;justify-content:space-between;align-items:center;padding:.35rem 0;border-bottom:1px solid #ffffff06}
+    .thresh-row:last-child{border-bottom:none}
+    .thresh-lbl{font-size:.72rem;color:#94a3b8}
+    .chip{display:inline-block;padding:.1rem .45rem;border-radius:4px;font-size:.62rem;font-weight:700}
+    .chip-low{background:#22c55e20;color:#22c55e}
+    .chip-mod{background:#f59e0b20;color:#f59e0b}
+    .chip-high{background:#ef444420;color:#ef4444}
 
-  .live-dot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    background: var(--low);
-    animation: pulse 2s infinite;
-  }
+    /* ── RF MODAL ── */
+    .feat-bar-wrap{margin-bottom:.5rem}
+    .feat-hdr{display:flex;justify-content:space-between;font-size:.65rem;margin-bottom:.2rem}
+    .feat-k{color:#94a3b8}.feat-p{color:#38bdf8;font-weight:600}
+    .feat-bg{height:4px;background:#1e293b;border-radius:3px;overflow:hidden}
+    .feat-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#38bdf8,#818cf8)}
+    .rf-row{display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid #ffffff06;font-size:.72rem}
+    .rf-row:last-child{border-bottom:none}
+    .rf-k{color:#64748b}.rf-v{color:#e2e8f0;font-weight:500}
+    .rf-status{display:flex;gap:.6rem;align-items:flex-start;margin-bottom:.85rem;padding:.65rem;background:#0a0f1e;border-radius:8px}
+    .rf-icon{font-size:1.5rem}
+    .rf-title{font-size:.85rem;font-weight:600;margin-bottom:.1rem}
+    .rf-sub{font-size:.65rem;color:#64748b}
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.3; }
-  }
-
-  .nav-link {
-    font-size: 0.85rem;
-    color: var(--muted);
-    text-decoration: none;
-    transition: color 0.2s;
-  }
-  .nav-link:hover { color: var(--text); }
-
-  /* ── LAYOUT ── */
-  .container {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 2rem;
-  }
-
-  .page-title {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 1.5rem;
-  }
-
-  /* ── RISK CARDS ── */
-  .risk-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .risk-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.5rem;
-    position: relative;
-    overflow: hidden;
-    transition: border-color 0.3s;
-  }
-
-  .risk-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    border-radius: 12px 12px 0 0;
-  }
-
-  .risk-card.low::before    { background: var(--low); }
-  .risk-card.moderate::before { background: var(--moderate); }
-  .risk-card.high::before   { background: var(--high); }
-
-  .bridge-name {
-    font-size: 0.7rem;
-    font-family: var(--font-mono);
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 0.5rem;
-  }
-
-  .risk-label {
-    font-size: 1.8rem;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
-  }
-
-  .risk-label.low      { color: var(--low); }
-  .risk-label.moderate { color: var(--moderate); }
-  .risk-label.high     { color: var(--high); }
-
-  .confidence-bar-wrap {
-    background: var(--border);
-    border-radius: 4px;
-    height: 4px;
-    margin: 0.75rem 0;
-    overflow: hidden;
-  }
-
-  .confidence-bar {
-    height: 100%;
-    border-radius: 4px;
-    transition: width 0.8s ease;
-  }
-
-  .confidence-bar.low      { background: var(--low); }
-  .confidence-bar.moderate { background: var(--moderate); }
-  .confidence-bar.high     { background: var(--high); }
-
-  .sensor-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
-    margin-top: 1rem;
-  }
-
-  .sensor-item {
-    background: var(--surface2);
-    border-radius: 8px;
-    padding: 0.6rem 0.75rem;
-  }
-
-  .sensor-label {
-    font-size: 0.65rem;
-    color: var(--muted);
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 0.2rem;
-  }
-
-  .sensor-value {
-    font-size: 1rem;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    color: var(--accent);
-  }
-
-  .sensor-unit {
-    font-size: 0.65rem;
-    color: var(--muted);
-    margin-left: 0.2rem;
-  }
-
-  .last-updated {
-    font-size: 0.65rem;
-    color: var(--muted);
-    font-family: var(--font-mono);
-    margin-top: 0.75rem;
-  }
-
-  /* ── CHARTS ── */
-  .charts-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  @media (max-width: 900px) {
-    .charts-grid { grid-template-columns: 1fr; }
-  }
-
-  .chart-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.25rem;
-  }
-
-  .chart-title {
-    font-size: 0.7rem;
-    font-family: var(--font-mono);
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 1rem;
-  }
-
-  .chart-wrap {
-    position: relative;
-    height: 200px;
-  }
-
-  /* ── HISTORY TABLE ── */
-  .table-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.25rem;
-    margin-bottom: 1.5rem;
-    overflow-x: auto;
-  }
-
-  .table-title {
-    font-size: 0.7rem;
-    font-family: var(--font-mono);
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 1rem;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.8rem;
-  }
-
-  th {
-    font-family: var(--font-mono);
-    font-size: 0.65rem;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    text-align: left;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid var(--border);
-    font-weight: 400;
-  }
-
-  td {
-    padding: 0.6rem 0.75rem;
-    border-bottom: 1px solid var(--border);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-  }
-
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: var(--surface2); }
-
-  .risk-pill {
-    display: inline-block;
-    padding: 0.15rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.65rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .pill-low      { background: rgba(34,197,94,0.15);  color: var(--low); }
-  .pill-moderate { background: rgba(245,158,11,0.15); color: var(--moderate); }
-  .pill-high     { background: rgba(239,68,68,0.15);  color: var(--high); }
-
-  .device-pill {
-    display: inline-block;
-    padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    font-size: 0.6rem;
-    background: var(--surface2);
-    color: var(--accent);
-    border: 1px solid var(--border);
-  }
-
-  /* ── STAT ROW ── */
-  .stat-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .stat-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.25rem;
-  }
-
-  .stat-label {
-    font-size: 0.65rem;
-    font-family: var(--font-mono);
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 0.4rem;
-  }
-
-  .stat-value {
-    font-size: 1.6rem;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    color: var(--text);
-  }
-
-  .stat-sub {
-    font-size: 0.65rem;
-    color: var(--muted);
-    margin-top: 0.2rem;
-  }
-
-  /* ── LOADING ── */
-  .loading {
-    color: var(--muted);
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    text-align: center;
-    padding: 2rem;
-  }
-</style>
+    /* ── ACTUAL VS PREDICTED ── */
+    .avp-wrap{overflow-x:auto}
+    .avp-tbl{width:100%;border-collapse:collapse;font-size:.62rem}
+    .avp-tbl th{color:#64748b;text-align:left;padding:.28rem .32rem;border-bottom:1px solid #334155;font-weight:500;text-transform:uppercase;letter-spacing:.04em}
+    .avp-tbl td{padding:.3rem .32rem;border-bottom:1px solid #1e293b;color:#94a3b8}
+    .avp-tbl tr:last-child td{border-bottom:none}
+    .accuracy-box{background:#0a0f1e;border-radius:7px;padding:.85rem;margin-bottom:.85rem;text-align:center}
+    .acc-pct{font-size:2.4rem;font-weight:700;line-height:1}
+    .acc-lbl{font-size:.6rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.2rem}
+    .acc-sub{font-size:.67rem;color:#94a3b8;margin-top:.3rem}
+    .cg{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.38rem;margin-bottom:.85rem}
+    .cc{background:#0a0f1e;border-radius:6px;padding:.45rem;text-align:center}
+    .cn{font-size:1.1rem;font-weight:700}
+    .cl{font-size:.57rem;color:#64748b;margin-top:.1rem}
+    .my{color:#22c55e;font-weight:700}
+    .mn{color:#ef4444;font-weight:700}
+  </style>
 </head>
 <body>
 
-<header>
-  <a class="logo" href="/">FLOOD<span>GUIDE</span></a>
-  <div class="header-right">
-    <div class="live-badge">
-      <div class="live-dot"></div>
-      LIVE
+<div class="topbar">
+  <div class="logo">FLOOD<span>GUIDE</span></div>
+  <div class="topbar-right">
+    <div class="live-dot-wrap"><div class="live-dot"></div>Live</div>
+    <div class="tnav">
+      <a href="/" class="tbtn">Map View</a>
+      <a href="/dashboard" class="tbtn active">Dashboard</a>
+      <button class="tbtn thresh" onclick="openModal('threshModal')">⚠️ Thresholds</button>
+      <button class="tbtn rfbtn" id="rfBtnTop" onclick="openModal('rfModal')">🌲 Random Forest</button>
     </div>
-    <a class="nav-link" href="/">Map View</a>
-    <a class="nav-link" href="/dashboard">Dashboard</a>
   </div>
-</header>
+</div>
 
-<div class="container">
+<!-- ══ THRESHOLD MODAL ══ -->
+<div class="modal-overlay" id="threshModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Flood Thresholds</div>
+      <span class="modal-close" onclick="closeModal('threshModal')">✕</span>
+    </div>
+    <div class="thresh-sec">Water Level (cm)</div>
+    <div class="thresh-row"><span class="thresh-lbl">Low risk</span><span class="chip chip-low">&lt; 80 cm</span></div>
+    <div class="thresh-row"><span class="thresh-lbl">Moderate risk</span><span class="chip chip-mod">80–150 cm</span></div>
+    <div class="thresh-row"><span class="thresh-lbl">High risk</span><span class="chip chip-high">&gt; 150 cm</span></div>
+    <div class="thresh-sec">Rainfall — 3-Hour Accumulation</div>
+    <div class="thresh-row"><span class="thresh-lbl">Low risk</span><span class="chip chip-low">&lt; 30 mm</span></div>
+    <div class="thresh-row"><span class="thresh-lbl">Moderate risk</span><span class="chip chip-mod">30–60 mm</span></div>
+    <div class="thresh-row"><span class="thresh-lbl">High risk</span><span class="chip chip-high">&gt; 60 mm</span></div>
+    <div class="thresh-sec">Flow Rate</div>
+    <div class="thresh-row"><span class="thresh-lbl">Moderate trigger</span><span class="chip chip-mod">&gt; 3.0 L</span></div>
+    <div class="thresh-sec">Rise Rate (cm/reading)</div>
+    <div class="thresh-row"><span class="thresh-lbl">High trigger</span><span class="chip chip-high">&gt; 10 cm + WL &gt; 100</span></div>
+    <div style="margin-top:.9rem;padding:.5rem .65rem;border-radius:6px;background:#0a0f1e;font-size:.62rem;color:#334155;line-height:1.55">
+      Source: PAGASA rainfall warning thresholds and Mandaue City DRRMO flood guidelines.<br>ML model trained on DOST-PAGASA Mactan Station data 2020–2024.
+    </div>
+  </div>
+</div>
 
+<!-- ══ RANDOM FOREST MODAL ══ -->
+<div class="modal-overlay" id="rfModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Prediction Model</div>
+      <span class="modal-close" onclick="closeModal('rfModal')">✕</span>
+    </div>
+    <div class="rf-status">
+      <div class="rf-icon">🌲</div>
+      <div>
+        <div class="rf-title" id="rfModalTitle" style="color:#22c55e">Random Forest Active</div>
+        <div class="rf-sub" id="rfModalSub">ML model loaded and predicting</div>
+      </div>
+    </div>
+    <div class="rf-row"><span class="rf-k">Algorithm</span><span class="rf-v">Random Forest Classifier</span></div>
+    <div class="rf-row"><span class="rf-k">Trees</span><span class="rf-v">300 estimators</span></div>
+    <div class="rf-row"><span class="rf-k">Max depth</span><span class="rf-v">10 levels</span></div>
+    <div class="rf-row"><span class="rf-k">Training data</span><span class="rf-v">PAGASA 2020–2024</span></div>
+    <div class="rf-row"><span class="rf-k">Training samples</span><span class="rf-v">1,461 daily records</span></div>
+    <div class="rf-row"><span class="rf-k">Model accuracy</span><span class="rf-v" style="color:#22c55e">99%</span></div>
+    <div class="rf-row"><span class="rf-k">Output classes</span><span class="rf-v">Low / Moderate / High</span></div>
+    <div class="rf-row"><span class="rf-k">Fallback</span><span class="rf-v">Rule-based thresholds</span></div>
+    <div style="margin-top:.85rem;font-size:.6rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem">Feature Importances</div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">rain_3h</span><span class="feat-p">62.9%</span></div><div class="feat-bg"><div class="feat-fill" style="width:62.9%"></div></div></div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">total_rain</span><span class="feat-p">33.4%</span></div><div class="feat-bg"><div class="feat-fill" style="width:33.4%"></div></div></div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">month</span><span class="feat-p">3.8%</span></div><div class="feat-bg"><div class="feat-fill" style="width:3.8%"></div></div></div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">water_level</span><span class="feat-p">0%</span></div><div class="feat-bg"><div class="feat-fill" style="width:0%"></div></div></div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">flow_rate</span><span class="feat-p">0%</span></div><div class="feat-bg"><div class="feat-fill" style="width:0%"></div></div></div>
+  </div>
+</div>
+
+<!-- ══ MAIN CONTENT ══ -->
+<div class="page">
   <div class="page-title">Real-Time Flood Risk Dashboard — Mandaue City</div>
 
-  <!-- RISK CARDS -->
-  <div class="risk-grid" id="riskCards">
-    <div class="loading">Loading sensor data...</div>
+  <!-- Bridge status cards -->
+  <div class="bridge-grid">
+    <!-- Bridge 1 -->
+    <div class="bridge-card low" id="card-bridge1">
+      <div class="bridge-name">Mandaue-Mactan Bridge 1</div>
+      <div class="risk-row">
+        <div class="risk-label risk-low" id="risk-bridge1">Low Risk</div>
+        <div class="risk-trend" id="trend-bridge1">Stable</div>
+      </div>
+      <div class="pill-row">
+        <div class="pill">3H <b id="pred3-bridge1">Low</b></div>
+        <div class="pill">6H <b id="pred6-bridge1">Low</b></div>
+        <div class="pill">Confidence <b id="conf-bridge1">0%</b></div>
+      </div>
+      <div class="sensor-grid">
+        <div class="sensor-item">
+          <div class="sensor-lbl">Rainfall</div>
+          <div class="sensor-val"><span id="rain-bridge1">0.00</span><span class="sensor-unit">mm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Water Level</div>
+          <div class="sensor-val"><span id="wl-bridge1">0.00</span><span class="sensor-unit">cm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Flow Rate</div>
+          <div class="sensor-val"><span id="flow-bridge1">0.00</span><span class="sensor-unit">L</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Rise Rate</div>
+          <div class="sensor-val"><span id="rise-bridge1">0.00</span><span class="sensor-unit">cm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Forecast 3H</div>
+          <div class="sensor-val"><span id="forecast-bridge1">0.00</span><span class="sensor-unit">mm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Subside Time</div>
+          <div class="sensor-val"><span id="subside-bridge1">—</span></div>
+        </div>
+      </div>
+      <div class="card-footer" id="updated-bridge1">Updated: —<br>Last DB reading: —</div>
+    </div>
+
+    <!-- Bridge 2 -->
+    <div class="bridge-card low" id="card-bridge2">
+      <div class="bridge-name">Marcelo Fernan Bridge</div>
+      <div class="risk-row">
+        <div class="risk-label risk-low" id="risk-bridge2">Low Risk</div>
+        <div class="risk-trend" id="trend-bridge2">Stable</div>
+      </div>
+      <div class="pill-row">
+        <div class="pill">3H <b id="pred3-bridge2">Low</b></div>
+        <div class="pill">6H <b id="pred6-bridge2">Low</b></div>
+        <div class="pill">Confidence <b id="conf-bridge2">0%</b></div>
+      </div>
+      <div class="sensor-grid">
+        <div class="sensor-item">
+          <div class="sensor-lbl">Rainfall</div>
+          <div class="sensor-val"><span id="rain-bridge2">0.00</span><span class="sensor-unit">mm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Water Level</div>
+          <div class="sensor-val"><span id="wl-bridge2">0.00</span><span class="sensor-unit">cm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Flow Rate</div>
+          <div class="sensor-val"><span id="flow-bridge2">0.00</span><span class="sensor-unit">L</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Rise Rate</div>
+          <div class="sensor-val"><span id="rise-bridge2">0.00</span><span class="sensor-unit">cm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Forecast 3H</div>
+          <div class="sensor-val"><span id="forecast-bridge2">0.00</span><span class="sensor-unit">mm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Subside Time</div>
+          <div class="sensor-val"><span id="subside-bridge2">—</span></div>
+        </div>
+      </div>
+      <div class="card-footer" id="updated-bridge2">Updated: —<br>Last DB reading: —</div>
+    </div>
   </div>
 
-  <!-- SUMMARY STATS -->
-  <div class="stat-row" id="statRow">
+  <!-- Stats row -->
+  <div class="stats-grid">
     <div class="stat-card">
-      <div class="stat-label">Total readings</div>
-      <div class="stat-value" id="statTotal">—</div>
+      <div class="stat-lbl">Total Readings</div>
+      <div class="stat-val" id="stat-total">—</div>
       <div class="stat-sub">in database</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">High risk events</div>
-      <div class="stat-value" style="color:var(--high)" id="statHigh">—</div>
+      <div class="stat-lbl">High Risk Events</div>
+      <div class="stat-val stat-high" id="stat-high">—</div>
       <div class="stat-sub">flooded = 2</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Moderate events</div>
-      <div class="stat-value" style="color:var(--moderate)" id="statMod">—</div>
+      <div class="stat-lbl">Moderate Events</div>
+      <div class="stat-val stat-mod" id="stat-mod">—</div>
       <div class="stat-sub">flooded = 1</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Avg water level</div>
-      <div class="stat-value" id="statWL">—</div>
+      <div class="stat-lbl">Avg Water Level</div>
+      <div class="stat-val stat-blue" id="stat-avgwl">—</div>
       <div class="stat-sub">cm (bridge1)</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Max rainfall</div>
-      <div class="stat-value" id="statRain">—</div>
+      <div class="stat-lbl">Max Rainfall</div>
+      <div class="stat-val" id="stat-maxrain">—</div>
       <div class="stat-sub">mm (all time)</div>
     </div>
   </div>
 
-  <!-- CHARTS -->
+  <!-- Charts -->
   <div class="charts-grid">
     <div class="chart-card">
-      <div class="chart-title">Water level — last 20 readings (bridge1)</div>
-      <div class="chart-wrap">
-        <canvas id="chartWL"></canvas>
-      </div>
+      <div class="chart-title">Water Level — Last 20 Readings (Bridge 1)</div>
+      <div class="chart-wrap"><canvas id="chartWL1"></canvas></div>
     </div>
     <div class="chart-card">
-      <div class="chart-title">Rainfall — last 20 readings (bridge1)</div>
-      <div class="chart-wrap">
-        <canvas id="chartRain"></canvas>
-      </div>
+      <div class="chart-title">Rainfall — Last 20 Readings (Bridge 1)</div>
+      <div class="chart-wrap"><canvas id="chartRain1"></canvas></div>
     </div>
     <div class="chart-card">
-      <div class="chart-title">Water level — last 20 readings (bridge2)</div>
-      <div class="chart-wrap">
-        <canvas id="chartWL2"></canvas>
-      </div>
+      <div class="chart-title">Water Level — Last 20 Readings (Bridge 2)</div>
+      <div class="chart-wrap"><canvas id="chartWL2"></canvas></div>
     </div>
     <div class="chart-card">
-      <div class="chart-title">Flood risk distribution</div>
-      <div class="chart-wrap">
-        <canvas id="chartDist"></canvas>
-      </div>
+      <div class="chart-title">Rainfall — Last 20 Readings (Bridge 2)</div>
+      <div class="chart-wrap"><canvas id="chartRain2"></canvas></div>
     </div>
   </div>
 
-  <!-- HISTORY TABLE -->
+  <!-- Recent readings table -->
   <div class="table-card">
-    <div class="table-title">Recent sensor readings</div>
-    <table>
-      <thead>
-        <tr>
-          <th>Timestamp</th>
-          <th>Device</th>
-          <th>Rainfall</th>
-          <th>Water Level</th>
-          <th>Flow Rate</th>
-          <th>Flood Risk</th>
-        </tr>
-      </thead>
-      <tbody id="historyBody">
-        <tr><td colspan="6" class="loading">Loading...</td></tr>
-      </tbody>
-    </table>
+    <div class="table-title">Recent Readings</div>
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Device</th>
+            <th>Rainfall (mm)</th>
+            <th>Water Level (cm)</th>
+            <th>Flow Rate (L)</th>
+            <th>Risk</th>
+          </tr>
+        </thead>
+        <tbody id="recentTableBody">
+          <tr><td colspan="6" style="text-align:center;color:#334155;padding:1rem">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
+  <div class="table-card">
+    <div class="table-title">Actual vs Predicted</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:.85rem;flex-wrap:wrap">
+      <div style="font-size:.7rem;color:#64748b">Compares stored flood labels against the current Random Forest output on historical readings.</div>
+      <button class="tbtn rfbtn" onclick="loadAvp()">Refresh Comparison</button>
+    </div>
+    <div id="avpContent">
+      <div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>
+    </div>
+  </div>
 </div>
 
 <script>
-const REFRESH_MS = 30000; // refresh every 30 seconds
+// ── MODAL SYSTEM ──────────────────────────────────────────────────────────
+function openModal(id){document.getElementById(id).classList.add('open')}
+function closeModal(id){document.getElementById(id).classList.remove('open')}
+document.querySelectorAll('.modal-overlay').forEach(o=>{
+  o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open')})
+});
 
-// Chart defaults
-Chart.defaults.color = '#64748b';
-Chart.defaults.borderColor = '#1f2d45';
-Chart.defaults.font.family = "'Space Mono', monospace";
-Chart.defaults.font.size = 11;
+// ── CHART INSTANCES ──────────────────────────────────────────────────────
+let charts={};
 
-function mkLineChart(id, label, color) {
-  return new Chart(document.getElementById(id), {
-    type: 'line',
-    data: {
-      labels: [],
-      datasets: [{
-        label,
-        data: [],
-        borderColor: color,
-        backgroundColor: color + '18',
-        borderWidth: 1.5,
-        pointRadius: 3,
-        pointBackgroundColor: color,
-        fill: true,
-        tension: 0.3
+Chart.defaults.color='#334155';
+Chart.defaults.borderColor='#1e293b';
+
+function buildChart(id,label,color){
+  const ctx=document.getElementById(id).getContext('2d');
+  charts[id]=new Chart(ctx,{
+    type:'line',
+    data:{
+      labels:[],
+      datasets:[{
+        label,data:[],
+        borderColor:color,
+        backgroundColor:color+'18',
+        tension:.35,fill:true,
+        pointBackgroundColor:color,
+        pointRadius:3,pointHoverRadius:5,
+        borderWidth:2
       }]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { color: '#1f2d45' }, ticks: { maxTicksLimit: 6, maxRotation: 0 } },
-        y: { grid: { color: '#1f2d45' }, beginAtZero: true }
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:false},tooltip:{backgroundColor:'#0f172a',borderColor:'#1e293b',borderWidth:1,titleColor:'#e2e8f0',bodyColor:'#64748b'}},
+      scales:{
+        x:{ticks:{color:'#334155',font:{size:9},maxTicksLimit:8,maxRotation:30},grid:{color:'#1e293b'},border:{color:'transparent'}},
+        y:{ticks:{color:'#334155',font:{size:9}},grid:{color:'#1e293b'},border:{color:'transparent'}}
       }
     }
   });
 }
 
-const chartWL   = mkLineChart('chartWL',   'Water Level (cm)', '#38bdf8');
-const chartRain = mkLineChart('chartRain', 'Rainfall (mm)',    '#818cf8');
-const chartWL2  = mkLineChart('chartWL2',  'Water Level (cm)', '#34d399');
+buildChart('chartWL1','Water Level (cm)','#38bdf8');
+buildChart('chartRain1','Rainfall (mm)','#818cf8');
+buildChart('chartWL2','Water Level (cm)','#06b6d4');
+buildChart('chartRain2','Rainfall (mm)','#a78bfa');
 
-const chartDist = new Chart(document.getElementById('chartDist'), {
-  type: 'doughnut',
-  data: {
-    labels: ['Low', 'Moderate', 'High'],
-    datasets: [{
-      data: [0, 0, 0],
-      backgroundColor: ['#22c55e', '#f59e0b', '#ef4444'],
-      borderColor: '#111827',
-      borderWidth: 3
-    }]
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: 'bottom',
-        labels: { padding: 16, usePointStyle: true, pointStyleWidth: 8 }
-      }
-    },
-    cutout: '65%'
-  }
-});
+function updateChart(id,labels,values){
+  const c=charts[id];
+  if(!c) return;
+  c.data.labels=labels;
+  c.data.datasets[0].data=values;
+  c.update('none');
+}
 
-function riskClass(f) {
-  if (f >= 2) return 'high';
-  if (f >= 1) return 'moderate';
+// ── RISK HELPERS ─────────────────────────────────────────────────────────
+function getRiskLabel(wl,rain){
+  if(wl>150||rain>30) return{label:'High Risk',cls:'high'};
+  if(wl>80||rain>15)  return{label:'Moderate Risk',cls:'moderate'};
+  return{label:'Low Risk',cls:'low'};
+}
+
+function riskClassFromLabel(riskLabel){
+  if(riskLabel==='High') return 'high';
+  if(riskLabel==='Moderate') return 'moderate';
   return 'low';
 }
 
-function riskLabel(f) {
-  if (f >= 2) return 'High';
-  if (f >= 1) return 'Moderate';
-  return 'Low';
+function setModelStatus(model){
+  const isMl = !!(model && model.ml_active);
+  const title = document.getElementById('rfModalTitle');
+  const sub = document.getElementById('rfModalSub');
+  const btn = document.getElementById('rfBtnTop');
+  if(isMl){
+    title.textContent='Random Forest Active';
+    title.style.color='#22c55e';
+    sub.textContent='ML model loaded and predicting live bridge risk';
+    btn.textContent='🌲 Random Forest';
+    btn.className='tbtn rfbtn';
+  } else {
+    title.textContent='Threshold Rules Active';
+    title.style.color='#f59e0b';
+    sub.textContent='Model fallback is active, using threshold rules';
+    btn.textContent='⚠️ Threshold Rules';
+    btn.className='tbtn thresh';
+  }
 }
 
-function fmtTime(ts) {
-  const d = new Date(ts);
-  return d.toLocaleString('en-PH', { month:'short', day:'numeric',
-    hour:'2-digit', minute:'2-digit' });
+function setCard(bridgeId,rows,status){
+  const latest=(rows&&rows.length)?rows[rows.length-1]:{};
+  const wl=status?parseFloat(status.water_level||0):parseFloat(latest.water_level||0);
+  const rain=status?parseFloat(status.rainfall||0):parseFloat(latest.total_rain||0);
+  const flow=status?parseFloat(status.flow_rate||0):parseFloat(latest.flow_rate||0);
+  const rise=status?parseFloat(status.rise_rate||0):(rows&&rows.length>=2
+    ? (parseFloat(rows[rows.length-1].water_level||0)-parseFloat(rows[rows.length-2].water_level||0))
+    : 0);
+  const fallbackRisk=getRiskLabel(wl,rain);
+  const riskLabel=status&&status.current_risk?status.current_risk:fallbackRisk.label.replace(' Risk','');
+  const riskCls=riskClassFromLabel(riskLabel);
+  const card=document.getElementById('card-'+bridgeId);
+  const riskEl=document.getElementById('risk-'+bridgeId);
+  const trendEl=document.getElementById('trend-'+bridgeId);
+  card.className='bridge-card '+riskCls;
+  riskEl.className='risk-label risk-'+riskCls;
+  riskEl.textContent=riskLabel+' Risk';
+  trendEl.textContent=status&&status.trend_text?status.trend_text:'Stable';
+  trendEl.style.color=status&&status.trend_color?status.trend_color:'#94a3b8';
+  document.getElementById('pred3-'+bridgeId).textContent=status&&status.pred_risk_3h?status.pred_risk_3h:'-';
+  document.getElementById('pred6-'+bridgeId).textContent=status&&status.pred_risk_6h?status.pred_risk_6h:'-';
+  document.getElementById('conf-'+bridgeId).textContent=status?parseFloat(status.current_conf||status.confidence||0).toFixed(1)+'%':'-';
+  document.getElementById('rain-'+bridgeId).textContent=rain.toFixed(2);
+  document.getElementById('wl-'+bridgeId).textContent=wl.toFixed(2);
+  document.getElementById('flow-'+bridgeId).textContent=flow.toFixed(2);
+  document.getElementById('rise-'+bridgeId).textContent=rise.toFixed(2);
+  document.getElementById('forecast-'+bridgeId).textContent=status?parseFloat(status.forecast_3h||0).toFixed(2):'0.00';
+  document.getElementById('subside-'+bridgeId).textContent=status&&status.subside_display?status.subside_display:'-';
+  const liveTs=status&&status.updated_at?fmtTs(status.updated_at):'—';
+  const dbTs=latest&&latest.timestamp?fmtTs(latest.timestamp):'—';
+  document.getElementById('updated-'+bridgeId).innerHTML='Updated: '+liveTs+'<br>Last DB reading: '+dbTs;
 }
 
-async function loadDashboard() {
-  try {
-    // Fetch map data for current risk
-    const mapRes  = await fetch('/api/map-data');
-    const mapData = await mapRes.json();
+function fmtTs(iso){
+  if(!iso) return '—';
+  return new Date(iso).toLocaleString('en-PH',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
 
-    // Fetch historical data
-    const histRes  = await fetch('/api/dashboard-data');
-    const histData = await histRes.json();
-
-    // ── RISK CARDS ──
-    const cardsHtml = mapData.locations.map(loc => {
-      const rc = riskClass(loc.risk_level || 0);
-      return `
-      <div class="risk-card ${rc}">
-        <div class="bridge-name">${loc.id === 'bridge1' ? 'Mandaue-Mactan Bridge 1' : 'Marcelo Fernan Bridge'}</div>
-        <div class="risk-label ${rc}">${loc.risk || 'Low'} Risk</div>
-        <div class="confidence-bar-wrap">
-          <div class="confidence-bar ${rc}" style="width:${loc.confidence||85}%"></div>
-        </div>
-        <div class="sensor-grid">
-          <div class="sensor-item">
-            <div class="sensor-label">Rainfall</div>
-            <div class="sensor-value">${(loc.rainfall||0).toFixed(2)}<span class="sensor-unit">mm</span></div>
-          </div>
-          <div class="sensor-item">
-            <div class="sensor-label">Water Level</div>
-            <div class="sensor-value">${(loc.water_level||0).toFixed(2)}<span class="sensor-unit">cm</span></div>
-          </div>
-          <div class="sensor-item">
-            <div class="sensor-label">Flow Rate</div>
-            <div class="sensor-value">${(loc.flow_rate||0).toFixed(2)}<span class="sensor-unit">L</span></div>
-          </div>
-          <div class="sensor-item">
-            <div class="sensor-label">Rise Rate</div>
-            <div class="sensor-value">${(loc.rise_rate||0).toFixed(2)}<span class="sensor-unit">cm</span></div>
-          </div>
-        </div>
-        <div class="last-updated">Updated: ${new Date().toLocaleTimeString('en-PH')}</div>
-      </div>`;
-    }).join('');
-    document.getElementById('riskCards').innerHTML = cardsHtml;
-
-    // ── STATS ──
-    if (histData.stats) {
-      const s = histData.stats;
-      document.getElementById('statTotal').textContent = s.total || 0;
-      document.getElementById('statHigh').textContent  = s.high  || 0;
-      document.getElementById('statMod').textContent   = s.moderate || 0;
-      document.getElementById('statWL').textContent    = s.avg_water_level ? s.avg_water_level.toFixed(1) : '—';
-      document.getElementById('statRain').textContent  = s.max_rain ? s.max_rain.toFixed(1) : '—';
+async function loadAvp(){
+  const content=document.getElementById('avpContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Running model on database...</div>';
+  try{
+    const res=await fetch('/api/actual-vs-predicted');
+    const data=await res.json();
+    if(data.error){
+      content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">'+data.error+'</div>';
+      return;
     }
+    const accColor=data.accuracy>=90?'#22c55e':data.accuracy>=70?'#f59e0b':'#ef4444';
+    const c=data.confusion;
+    const riskColor=r=>r==='High'?'#ef4444':r==='Moderate'?'#f59e0b':'#22c55e';
+    let rows='';
+    data.rows.forEach(r=>{
+      const ts=new Date(r.timestamp).toLocaleString('en-PH',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+      rows+='<tr><td>'+ts+'</td><td style="color:'+riskColor(r.actual)+';font-weight:600">'+r.actual+'</td><td style="color:'+riskColor(r.predicted)+';font-weight:600">'+r.predicted+'</td><td>'+r.confidence+'%</td><td class="'+(r.match?'my':'mn')+'">'+(r.match?'V':'X')+'</td></tr>';
+    });
+    content.innerHTML='<div class="accuracy-box"><div class="acc-pct" style="color:'+accColor+'">'+data.accuracy+'%</div><div class="acc-lbl">Overall Accuracy</div><div class="acc-sub">'+data.correct+' correct out of '+data.total+' predictions</div></div><div class="sec-title">Correct Predictions</div><div class="cg"><div class="cc"><div class="cn" style="color:#22c55e">'+c.low_correct+'</div><div class="cl">Low V</div></div><div class="cc"><div class="cn" style="color:#f59e0b">'+c.mod_correct+'</div><div class="cl">Moderate V</div></div><div class="cc"><div class="cn" style="color:#ef4444">'+c.high_correct+'</div><div class="cl">High V</div></div></div><div class="sec-title">Misclassifications</div><div class="cg" style="margin-bottom:.85rem"><div class="cc"><div class="cn" style="color:#64748b">'+(c.low_as_moderate+c.low_as_high)+'</div><div class="cl">Low wrong</div></div><div class="cc"><div class="cn" style="color:#64748b">'+(c.mod_as_low+c.mod_as_high)+'</div><div class="cl">Mod wrong</div></div><div class="cc"><div class="cn" style="color:#64748b">'+(c.high_as_low+c.high_as_moderate)+'</div><div class="cl">High wrong</div></div></div><div class="sec-title">Last '+data.rows.length+' Readings</div><div class="avp-wrap" style="margin-top:.45rem"><table class="avp-tbl"><thead><tr><th>Time</th><th>Actual</th><th>Predicted</th><th>Conf</th><th>V</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
 
-    // ── CHARTS ──
-    if (histData.bridge1 && histData.bridge1.length > 0) {
-      const b1     = histData.bridge1.slice(-20);
-      const labels = b1.map(r => fmtTime(r.timestamp));
-      chartWL.data.labels   = labels;
-      chartWL.data.datasets[0].data = b1.map(r => r.water_level || 0);
-      chartWL.update();
-      chartRain.data.labels = labels;
-      chartRain.data.datasets[0].data = b1.map(r => r.total_rain || 0);
-      chartRain.update();
-    }
+// ── LOAD DASHBOARD DATA ───────────────────────────────────────────────────
+async function loadDashboard(){
+  try{
+    const res=await fetch('/api/dashboard-data');
+    const data=await res.json();
+    if(data.error){console.error('Dashboard error:',data.error);return;}
 
-    if (histData.bridge2 && histData.bridge2.length > 0) {
-      const b2 = histData.bridge2.slice(-20);
-      chartWL2.data.labels = b2.map(r => fmtTime(r.timestamp));
-      chartWL2.data.datasets[0].data = b2.map(r => r.water_level || 0);
-      chartWL2.update();
-    }
+    // Bridge cards
+    const live=data.bridges||{};
+    setCard('bridge1',data.bridge1||[],live.bridge1||null);
+    setCard('bridge2',data.bridge2||[],live.bridge2||null);
+    setModelStatus(data.model||{});
 
-    if (histData.stats) {
-      const s = histData.stats;
-      const low = (s.total||0) - (s.high||0) - (s.moderate||0);
-      chartDist.data.datasets[0].data = [Math.max(low,0), s.moderate||0, s.high||0];
-      chartDist.update();
-    }
+    // Stats
+    const s=data.stats||{};
+    document.getElementById('stat-total').textContent=s.total?Math.round(s.total).toLocaleString():'0';
+    document.getElementById('stat-high').textContent=s.high?Math.round(s.high):'0';
+    document.getElementById('stat-mod').textContent=s.moderate?Math.round(s.moderate):'0';
+    document.getElementById('stat-avgwl').textContent=s.avg_water_level?parseFloat(s.avg_water_level).toFixed(1):'0';
+    document.getElementById('stat-maxrain').textContent=s.max_rain?parseFloat(s.max_rain).toFixed(1):'0';
 
-    // ── HISTORY TABLE ──
-    if (histData.recent && histData.recent.length > 0) {
-      const rows = histData.recent.map(r => {
-        const rc = riskClass(r.flooded);
-        return `<tr>
-          <td>${fmtTime(r.timestamp)}</td>
-          <td><span class="device-pill">${r.device_id||'bridge1'}</span></td>
-          <td>${(r.total_rain||0).toFixed(2)} mm</td>
-          <td>${(r.water_level||0).toFixed(2)} cm</td>
-          <td>${(r.flow_rate||0).toFixed(2)} L</td>
-          <td><span class="risk-pill pill-${rc}">${riskLabel(r.flooded)}</span></td>
-        </tr>`;
+    // Charts — last 20 readings each bridge
+    const b1=data.bridge1||[];
+    const b2=data.bridge2||[];
+    const last20=(arr)=>arr.slice(-20);
+    const mkLabels=(arr)=>arr.map(r=>fmtTs(r.timestamp));
+
+    const b1_20=last20(b1),b2_20=last20(b2);
+    updateChart('chartWL1',mkLabels(b1_20),b1_20.map(r=>parseFloat(r.water_level||0)));
+    updateChart('chartRain1',mkLabels(b1_20),b1_20.map(r=>parseFloat(r.total_rain||0)));
+    updateChart('chartWL2',mkLabels(b2_20),b2_20.map(r=>parseFloat(r.water_level||0)));
+    updateChart('chartRain2',mkLabels(b2_20),b2_20.map(r=>parseFloat(r.total_rain||0)));
+
+    // Recent table
+    const recent=data.recent||[];
+    const tbody=document.getElementById('recentTableBody');
+    if(recent.length===0){
+      tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:#334155;padding:1rem">No readings yet.</td></tr>';
+    } else {
+      tbody.innerHTML=recent.map(r=>{
+        const wl=parseFloat(r.water_level||0),rain=parseFloat(r.total_rain||0);
+        const risk=getRiskLabel(wl,rain);
+        const dev=r.device_id==='bridge2'?'Bridge 2':'Bridge 1';
+        return '<tr><td>'+fmtTs(r.timestamp)+'</td><td style="color:#64748b">'+dev+'</td><td>'+rain.toFixed(2)+'</td><td>'+wl.toFixed(2)+'</td><td>'+parseFloat(r.flow_rate||0).toFixed(2)+'</td><td><span class="rbadge rb-'+risk.cls+'">'+risk.label+'</span></td></tr>';
       }).join('');
-      document.getElementById('historyBody').innerHTML = rows;
     }
 
-  } catch (err) {
-    console.error('Dashboard error:', err);
-    document.getElementById('riskCards').innerHTML =
-      `<div class="loading">Error loading data — ${err.message}</div>`;
+    // Update RF modal badge on dashboard based on loaded data
+    // (just keep it as active since we loaded successfully)
+  } catch(e){
+    console.error('loadDashboard failed:',e);
   }
 }
 
 loadDashboard();
-setInterval(loadDashboard, REFRESH_MS);
+loadAvp();
+setInterval(loadDashboard,30000);
+setInterval(loadAvp,30000);
 </script>
 </body>
 </html>

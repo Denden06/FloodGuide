@@ -1,586 +1,853 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>FloodGuide – Real-Time Flood Risk Map</title>
+  <title>FloodGuide - Real-Time Flood Risk Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
-
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/leaflet-routing-machine.min.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body, html {
-      height: 100%;
-      font-family: 'Inter', 'Segoe UI', sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      overflow: hidden;
-    }
-
-    /* ── TOP NAV ── */
-    .topbar {
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      height: 56px;
-      background: #1e293bef;
-      backdrop-filter: blur(12px);
-      border-bottom: 1px solid #334155;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 1.25rem;
-      z-index: 9999;
-    }
-
-    .topbar-left { display: flex; align-items: center; gap: 0.75rem; }
-
-    .logo { font-size: 1.05rem; font-weight: 700; color: #38bdf8; letter-spacing: 0.05em; }
-    .logo span { color: #64748b; font-weight: 400; }
-
-    .live-indicator {
-      display: flex; align-items: center; gap: 0.35rem;
-      font-size: 0.65rem; font-weight: 600;
-      color: #22c55e; letter-spacing: 0.08em; text-transform: uppercase;
-    }
-
-    .live-dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: #22c55e; animation: blink 2s infinite;
-    }
-
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
-
-    .topbar-right { display: flex; align-items: center; gap: 0.4rem; }
-
-    .nav-btn {
-      display: flex; align-items: center; gap: 0.35rem;
-      padding: 0.38rem 0.85rem; border-radius: 7px;
-      font-size: 0.78rem; font-weight: 500;
-      text-decoration: none; border: 1px solid #334155;
-      background: transparent; color: #94a3b8;
-      cursor: pointer; transition: all 0.18s;
-      white-space: nowrap; font-family: inherit;
-    }
-
-    .nav-btn:hover { background: #1e293b; color: #e2e8f0; border-color: #475569; }
-    .nav-btn.active { background: #38bdf820; border-color: #38bdf860; color: #38bdf8; }
-    .nav-btn.btn-route { background: #f59e0b20; border-color: #f59e0b60; color: #f59e0b; }
-    .nav-btn.btn-route:hover { background: #f59e0b35; }
-
-    .ml-badge {
-      display: flex; align-items: center; gap: 0.35rem;
-      padding: 0.38rem 0.85rem; border-radius: 7px;
-      font-size: 0.72rem; font-weight: 600; border: 1px solid;
-      cursor: pointer; transition: all 0.18s; white-space: nowrap;
-    }
-
-    .ml-active   { background:#22c55e18; border-color:#22c55e50; color:#22c55e; }
-    .ml-fallback { background:#f59e0b18; border-color:#f59e0b50; color:#f59e0b; }
-
-    /* ── MAP ── */
-    #map { position: fixed; top: 56px; left: 0; right: 0; bottom: 0; }
-
-    /* ── SIDE PANELS ── */
-    .side-panel {
-      position: fixed; top: 56px; right: 0;
-      width: 300px; height: calc(100vh - 56px);
-      background: #1e293bef; backdrop-filter: blur(12px);
-      border-left: 1px solid #334155;
-      padding: 1.25rem; overflow-y: auto;
-      z-index: 9998;
-      transform: translateX(100%);
-      transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
-    }
-
-    .side-panel.open { transform: translateX(0); }
-
-    .panel-header {
-      display: flex; align-items: center;
-      justify-content: space-between; margin-bottom: 1.1rem;
-    }
-
-    .panel-title {
-      font-size: 0.72rem; font-weight: 600;
-      color: #64748b; text-transform: uppercase; letter-spacing: 0.08em;
-    }
-
-    .panel-close {
-      cursor: pointer; color: #475569;
-      font-size: 1.1rem; line-height: 1; transition: color 0.15s;
-    }
-
-    .panel-close:hover { color: #e2e8f0; }
-
-    /* ── THRESHOLD PANEL ── */
-    .thresh-section-title {
-      font-size: 0.62rem; font-weight: 600; color: #475569;
-      text-transform: uppercase; letter-spacing: 0.06em;
-      margin: 0.85rem 0 0.4rem;
-    }
-
-    .thresh-row {
-      display: flex; justify-content: space-between;
-      align-items: center; padding: 0.45rem 0;
-      border-bottom: 1px solid #ffffff08;
-    }
-
-    .thresh-row:last-of-type { border-bottom: none; }
-    .thresh-label { font-size: 0.75rem; color: #94a3b8; }
-
-    .chip {
-      display: inline-block; padding: 0.12rem 0.55rem;
-      border-radius: 5px; font-size: 0.65rem; font-weight: 700;
-    }
-
-    .chip-low      { background:#22c55e20; color:#22c55e; }
-    .chip-moderate { background:#f59e0b20; color:#f59e0b; }
-    .chip-high     { background:#ef444420; color:#ef4444; }
-
-    .thresh-source {
-      margin-top: 1rem; padding: 0.6rem 0.75rem;
-      background: #0f172a; border-radius: 7px;
-      font-size: 0.65rem; color: #475569; line-height: 1.55;
-    }
-
-    /* ── ML PANEL ── */
-    .ml-status-row {
-      display: flex; gap: 0.75rem; align-items: flex-start;
-      margin-bottom: 1rem; padding: 0.75rem;
-      background: #0f172a; border-radius: 8px;
-    }
-
-    .ml-icon { font-size: 1.5rem; line-height: 1; }
-    .ml-status-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.15rem; }
-    .ml-status-sub   { font-size: 0.68rem; color: #64748b; }
-
-    .ml-row {
-      display: flex; justify-content: space-between;
-      padding: 0.45rem 0; border-bottom: 1px solid #ffffff08;
-      font-size: 0.75rem;
-    }
-
-    .ml-row:last-child { border-bottom: none; }
-    .ml-key   { color: #64748b; }
-    .ml-value { color: #e2e8f0; font-weight: 500; }
-
-    .feat-label-row {
-      display: flex; justify-content: space-between;
-      font-size: 0.68rem; margin-bottom: 0.2rem;
-    }
-
-    .feat-key { color: #94a3b8; }
-    .feat-pct { color: #38bdf8; font-weight: 600; }
-
-    .feat-bar-bg {
-      height: 4px; background: #1e3a5f;
-      border-radius: 4px; margin-bottom: 0.5rem; overflow: hidden;
-    }
-
-    .feat-bar-fill {
-      height: 100%; border-radius: 4px;
-      background: linear-gradient(90deg, #38bdf8, #818cf8);
-    }
-
-    /* ── SAFE ROUTES PANEL ── */
-    .route-intro {
-      font-size: 0.75rem; color: #94a3b8;
-      line-height: 1.6; margin-bottom: 1rem;
-    }
-
-    .route-select-label {
-      font-size: 0.65rem; font-weight: 600; color: #64748b;
-      text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 0.35rem;
-    }
-
-    .route-select {
-      width: 100%; background: #0f172a; border: 1px solid #334155;
-      border-radius: 7px; color: #e2e8f0;
-      padding: 0.55rem 0.75rem; font-size: 0.78rem;
-      margin-bottom: 0.75rem; outline: none; font-family: inherit;
-    }
-
-    .route-select:focus { border-color: #38bdf8; }
-
-    .route-btn {
-      width: 100%; padding: 0.6rem; background: #38bdf8;
-      color: #0f172a; border: none; border-radius: 7px;
-      font-size: 0.82rem; font-weight: 700;
-      cursor: pointer; transition: opacity 0.18s;
-      font-family: inherit; margin-bottom: 1rem;
-    }
-
-    .route-btn:hover { opacity: 0.88; }
-
-    .route-card {
-      background: #0f172a; border-radius: 8px;
-      padding: 0.85rem; margin-bottom: 0.6rem;
-      border-left: 3px solid #22c55e;
-    }
-
-    .route-card.warning { border-left-color: #f59e0b; }
-    .route-card.danger  { border-left-color: #ef4444; }
-
-    .route-rank {
-      font-size: 0.6rem; color: #64748b;
-      margin-bottom: 0.25rem;
-      text-transform: uppercase; letter-spacing: 0.05em;
-    }
-
-    .route-name { font-size: 0.82rem; font-weight: 600; margin-bottom: 0.3rem; }
-    .route-desc { font-size: 0.7rem; color: #94a3b8; line-height: 1.5; }
-
-    .route-status {
-      display: inline-block; font-size: 0.6rem; font-weight: 700;
-      padding: 0.1rem 0.45rem; border-radius: 4px; margin-top: 0.4rem;
-    }
-
-    .status-safe    { background:#22c55e20; color:#22c55e; }
-    .status-caution { background:#f59e0b20; color:#f59e0b; }
-    .status-avoid   { background:#ef444420; color:#ef4444; }
-
-    .route-empty {
-      text-align: center; padding: 2rem 0;
-      color: #475569; font-size: 0.78rem;
-    }
-
-    /* ── LEGEND ── */
-    #legend {
-      position: fixed; bottom: 2rem; left: 1rem;
-      background: #1e293bed; backdrop-filter: blur(8px);
-      padding: 0.85rem 1rem; border: 1px solid #334155;
-      border-radius: 10px; font-size: 0.78rem;
-      z-index: 9997;
-    }
-
-    .legend-title {
-      font-size: 0.62rem; font-weight: 600; color: #64748b;
-      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.5rem;
-    }
-
-    .legend-item {
-      display: flex; align-items: center;
-      gap: 0.5rem; margin-bottom: 0.3rem; color: #cbd5e1;
-    }
-
-    .legend-item:last-child { margin-bottom: 0; }
-
-    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-
-    /* Leaflet dark popup */
-    .leaflet-popup-content-wrapper {
-      background: #1e293b !important; border: 1px solid #334155 !important;
-      border-radius: 10px !important; box-shadow: 0 8px 32px #00000080 !important;
-      color: #e2e8f0 !important;
-    }
-
-    .leaflet-popup-tip { background: #1e293b !important; }
-    .leaflet-popup-close-button { color: #64748b !important; top: 8px !important; right: 8px !important; }
-    .leaflet-popup-content { margin: 14px 16px !important; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body,html{height:100%;font-family:'Inter','Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;overflow:hidden}
+    .topbar{position:fixed;top:0;left:0;right:0;height:56px;background:rgba(30,41,59,.97);backdrop-filter:blur(12px);border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between;padding:0 1rem;z-index:10000}
+    .topbar-left{display:flex;align-items:center;gap:.6rem;flex-shrink:0}
+    .logo{font-size:1rem;font-weight:700;color:#38bdf8;letter-spacing:.05em}
+    .logo span{color:#64748b;font-weight:400}
+    .live-indicator{display:flex;align-items:center;gap:.3rem;font-size:.6rem;font-weight:600;color:#22c55e;text-transform:uppercase;letter-spacing:.08em}
+    .live-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;animation:blink 2s infinite}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+    .topbar-right{display:flex;align-items:center;gap:.3rem;flex-wrap:nowrap;overflow-x:auto}
+    .nav-btn{display:flex;align-items:center;gap:.3rem;padding:.35rem .65rem;border-radius:6px;font-size:.72rem;font-weight:500;text-decoration:none;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer;transition:all .15s;white-space:nowrap;font-family:inherit;user-select:none}
+    .nav-btn:hover{background:#1e293b;color:#e2e8f0;border-color:#475569}
+    .nav-btn.active{background:#38bdf820;border-color:#38bdf860;color:#38bdf8}
+    .nav-btn.btn-route{background:#f59e0b18;border-color:#f59e0b60;color:#f59e0b}.nav-btn.btn-route:hover{background:#f59e0b28}
+    .nav-btn.btn-sim{background:#a855f718;border-color:#a855f760;color:#a855f7}.nav-btn.btn-sim:hover{background:#a855f728}
+    .nav-btn.btn-hist{background:#06b6d418;border-color:#06b6d460;color:#06b6d4}.nav-btn.btn-hist:hover{background:#06b6d428}
+    .sim-banner{position:fixed;top:56px;left:50%;transform:translateX(-50%);background:#a855f7;color:#fff;padding:.38rem 1.2rem;border-radius:0 0 8px 8px;font-size:.72rem;font-weight:700;z-index:9999;display:none;letter-spacing:.04em;box-shadow:0 4px 12px #a855f740;cursor:pointer;max-width:min(92vw,900px);text-align:center}
+    .sim-banner.visible{display:block}
+    #map{position:fixed;top:56px;left:0;right:0;bottom:0;z-index:1}
+    .leaflet-routing-container{display:none!important}
+    .side-panel{position:fixed;top:56px;right:0;width:320px;height:calc(100vh - 56px);background:rgba(30,41,59,.97);backdrop-filter:blur(12px);border-left:1px solid #334155;padding:1.1rem;overflow-y:auto;z-index:9999;transform:translateX(100%);transition:transform .28s cubic-bezier(.4,0,.2,1)}
+    .side-panel.open{transform:translateX(0)}
+    .panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
+    .panel-title{font-size:.68rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em}
+    .panel-close{cursor:pointer;color:#475569;font-size:1.1rem;line-height:1;transition:color .15s;padding:.2rem}
+    .panel-close:hover{color:#e2e8f0}
+    .sec-title{font-size:.6rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.06em;margin:.75rem 0 .35rem}
+    .intro-txt{font-size:.72rem;color:#94a3b8;line-height:1.55;margin-bottom:.85rem}
+    .sel-lbl{font-size:.6rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.3rem}
+    .fsel{width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:.48rem .65rem;font-size:.75rem;margin-bottom:.6rem;outline:none;font-family:inherit;appearance:auto}
+    .fsel:focus{border-color:#38bdf8}
+    .act-btn{width:100%;padding:.52rem;border:none;border-radius:6px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:.6rem;transition:opacity .15s}
+    .act-btn:hover{opacity:.88}
+    .btn-blue{background:#38bdf8;color:#0f172a}.btn-cyan{background:#06b6d4;color:#0f172a}.btn-grey{background:#334155;color:#94a3b8}
+    .infobox{padding:.5rem .65rem;border-radius:6px;background:#0f172a;font-size:.63rem;color:#94a3b8;line-height:1.55}
+    .route-card{background:#0f172a;border-radius:7px;padding:.7rem;margin-bottom:.45rem;border-left:3px solid #22c55e}
+    .route-card.warn{border-left-color:#f59e0b}.route-card.danger{border-left-color:#ef4444}.route-card.info{border-left-color:#38bdf8}
+    .route-card.active{box-shadow:0 0 0 1px #38bdf8 inset;background:#132136}
+    .route-rank{font-size:.57rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.18rem}
+    .route-name{font-size:.78rem;font-weight:600;margin-bottom:.22rem}
+    .route-desc{font-size:.65rem;color:#94a3b8;line-height:1.45;margin-bottom:.3rem}
+    .route-actions{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin-top:.45rem}
+    .route-open{border:none;border-radius:6px;padding:.38rem .7rem;font-size:.68rem;font-weight:700;cursor:pointer;background:#22c55e;color:#0f172a}
+    .rs{display:inline-block;font-size:.57rem;font-weight:700;padding:.07rem .38rem;border-radius:4px}
+    .rs-safe{background:#22c55e20;color:#22c55e}.rs-caut{background:#f59e0b20;color:#f59e0b}.rs-avoid{background:#ef444420;color:#ef4444}.rs-info{background:#38bdf820;color:#38bdf8}
+    .route-empty{text-align:center;padding:1.5rem 0;color:#475569;font-size:.73rem}
+    .sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:.45rem;margin-bottom:.85rem}
+    .sim-btn{padding:.52rem;border:1px solid;border-radius:7px;font-size:.73rem;font-weight:700;cursor:pointer;text-align:center;font-family:inherit;background:transparent;transition:all .15s}
+    .sbl{border-color:#22c55e60;color:#22c55e}.sbl:hover{background:#22c55e20}
+    .sbm{border-color:#f59e0b60;color:#f59e0b}.sbm:hover{background:#f59e0b20}
+    .sbh{border-color:#ef444460;color:#ef4444}.sbh:hover{background:#ef444420}
+    .sbr{border-color:#64748b60;color:#64748b;grid-column:1/-1}.sbr:hover{background:#64748b20}
+    .sim-status{padding:.55rem .65rem;border-radius:7px;font-size:.72rem;display:none;margin-bottom:.75rem}
+    .sim-status.show{display:block}
+    .hist-list{max-height:420px;overflow-y:auto}
+    .hist-item{background:#0f172a;border-radius:7px;padding:.6rem;margin-bottom:.38rem;cursor:pointer;border:1px solid #1e3a5f;transition:border-color .15s}
+    .hist-item:hover{border-color:#38bdf8}.hist-item.replaying{border-color:#a855f7!important;background:#a855f710}
+    .hist-ts{font-size:.62rem;color:#64748b;margin-bottom:.18rem}.hist-vals{font-size:.67rem;color:#94a3b8}
+    .hist-risk{display:inline-block;font-size:.57rem;font-weight:700;padding:.05rem .35rem;border-radius:4px;margin-bottom:.18rem}
+    .hist-empty{text-align:center;padding:1.5rem 0;color:#475569;font-size:.72rem}
+    #legend{position:fixed;bottom:1.5rem;left:1rem;background:rgba(30,41,59,.92);backdrop-filter:blur(8px);padding:.72rem .9rem;border:1px solid #334155;border-radius:9px;z-index:9997}
+    .leg-title{font-size:.57rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.38rem}
+    .leg-item{display:flex;align-items:center;gap:.38rem;margin-bottom:.22rem;font-size:.7rem;color:#cbd5e1}
+    .leg-item:last-child{margin-bottom:0}.leg-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}.leg-line{width:18px;height:3px;border-radius:2px;flex-shrink:0}
+    .leaflet-popup-content-wrapper{background:#1e293b!important;border:1px solid #334155!important;border-radius:10px!important;box-shadow:0 8px 32px #00000080!important;color:#e2e8f0!important}
+    .leaflet-popup-tip{background:#1e293b!important}.leaflet-popup-close-button{color:#64748b!important;top:8px!important;right:8px!important}
+    .leaflet-popup-content{margin:12px 14px!important}
+    @keyframes pulse{0%{transform:scale(1);opacity:1}50%{transform:scale(1.7);opacity:.5}100%{transform:scale(1);opacity:1}}
   </style>
 </head>
 <body>
-
-<!-- ── TOP NAV ── -->
 <div class="topbar">
   <div class="topbar-left">
     <div class="logo">FLOOD<span>GUIDE</span></div>
-    <div class="live-indicator">
-      <div class="live-dot"></div>
-      Live
-    </div>
+    <div class="live-indicator"><div class="live-dot"></div>Live</div>
   </div>
-
   <div class="topbar-right">
-    <a href="/" class="nav-btn active">🗺 Map</a>
-    <a href="/dashboard" class="nav-btn">📊 Dashboard</a>
-    <button class="nav-btn btn-route" onclick="togglePanel('routePanel')">🛣 Safe Routes</button>
-    <button class="nav-btn" onclick="togglePanel('threshPanel')">⚠️ Thresholds</button>
-    <div class="ml-badge ml-active" id="mlBadge" onclick="togglePanel('mlPanel')">
-      🌲 <span id="mlBadgeText">Random Forest</span>
-    </div>
+    <a href="/" class="nav-btn active">Map</a>
+    <a href="/dashboard" class="nav-btn">Dashboard</a>
+    <button class="nav-btn btn-route" onclick="togglePanel('routePanel')">Routes</button>
+    <button class="nav-btn btn-sim" onclick="togglePanel('simPanel')">Simulate</button>
+    <button class="nav-btn btn-hist" onclick="togglePanel('histPanel')">History</button>
   </div>
 </div>
 
-<!-- ── MAP ── -->
+<div class="sim-banner" id="simBanner" onclick="simulate('reset')">SIMULATION ACTIVE - Click to reset</div>
 <div id="map"></div>
 
-<!-- ── LEGEND ── -->
 <div id="legend">
-  <div class="legend-title">Flood Risk Levels</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Low Risk</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> Moderate Risk</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div> High Risk</div>
+  <div class="leg-title">Flood Risk</div>
+  <div class="leg-item"><div class="leg-dot" style="background:#22c55e"></div>Low</div>
+  <div class="leg-item"><div class="leg-dot" style="background:#f59e0b"></div>Moderate</div>
+  <div class="leg-item"><div class="leg-dot" style="background:#ef4444"></div>High</div>
+  <div class="leg-title" style="margin-top:.45rem">Routes</div>
+  <div class="leg-item"><div class="leg-line" style="background:#38bdf8"></div>Bridge 1</div>
+  <div class="leg-item"><div class="leg-line" style="background:#a855f7"></div>Bridge 2</div>
+  <div class="leg-item"><div class="leg-line" style="background:#22c55e"></div>CCLEX</div>
 </div>
 
-<!-- ── THRESHOLD PANEL ── -->
-<div class="side-panel" id="threshPanel">
-  <div class="panel-header">
-    <div class="panel-title">Flood Thresholds</div>
-    <span class="panel-close" onclick="closePanel('threshPanel')">✕</span>
-  </div>
-
-  <div class="thresh-section-title">Water Level (cm)</div>
-  <div class="thresh-row"><span class="thresh-label">Low risk</span><span class="chip chip-low">&lt; 80 cm</span></div>
-  <div class="thresh-row"><span class="thresh-label">Moderate risk</span><span class="chip chip-moderate">80 – 150 cm</span></div>
-  <div class="thresh-row"><span class="thresh-label">High risk</span><span class="chip chip-high">&gt; 150 cm</span></div>
-
-  <div class="thresh-section-title">Rainfall — 3-hour Accumulation</div>
-  <div class="thresh-row"><span class="thresh-label">Low risk</span><span class="chip chip-low">&lt; 30 mm</span></div>
-  <div class="thresh-row"><span class="thresh-label">Moderate risk</span><span class="chip chip-moderate">30 – 60 mm</span></div>
-  <div class="thresh-row"><span class="thresh-label">High risk</span><span class="chip chip-high">&gt; 60 mm</span></div>
-
-  <div class="thresh-section-title">Flow Rate</div>
-  <div class="thresh-row"><span class="thresh-label">Moderate trigger</span><span class="chip chip-moderate">&gt; 3.0 L</span></div>
-
-  <div class="thresh-section-title">Rise Rate (cm/reading)</div>
-  <div class="thresh-row"><span class="thresh-label">High trigger</span><span class="chip chip-high">&gt; 10 cm + WL &gt; 100</span></div>
-
-  <div class="thresh-source">
-    Based on PAGASA rainfall warning thresholds and Mandaue City flood guidelines.
-    ML model trained on 2020–2024 Mactan Station data from DOST-PAGASA.
-  </div>
-</div>
-
-<!-- ── ML MODEL PANEL ── -->
-<div class="side-panel" id="mlPanel">
-  <div class="panel-header">
-    <div class="panel-title">Prediction Model</div>
-    <span class="panel-close" onclick="closePanel('mlPanel')">✕</span>
-  </div>
-
-  <div class="ml-status-row">
-    <div class="ml-icon">🌲</div>
-    <div>
-      <div class="ml-status-title" id="mlStatusTitle" style="color:#22c55e">Random Forest Active</div>
-      <div class="ml-status-sub" id="mlStatusSub">ML model loaded and predicting</div>
-    </div>
-  </div>
-
-  <div class="ml-row"><span class="ml-key">Algorithm</span><span class="ml-value">Random Forest Classifier</span></div>
-  <div class="ml-row"><span class="ml-key">Number of trees</span><span class="ml-value">300 estimators</span></div>
-  <div class="ml-row"><span class="ml-key">Max depth</span><span class="ml-value">10 levels</span></div>
-  <div class="ml-row"><span class="ml-key">Training data</span><span class="ml-value">PAGASA 2020–2024</span></div>
-  <div class="ml-row"><span class="ml-key">Training samples</span><span class="ml-value">1,461 daily records</span></div>
-  <div class="ml-row"><span class="ml-key">Model accuracy</span><span class="ml-value" style="color:#22c55e">99%</span></div>
-  <div class="ml-row"><span class="ml-key">Output classes</span><span class="ml-value">Low / Moderate / High</span></div>
-  <div class="ml-row"><span class="ml-key">Fallback mode</span><span class="ml-value">Rule-based thresholds</span></div>
-  <div class="ml-row"><span class="ml-key">Current mode</span><span class="ml-value" id="mlCurrentMode" style="color:#22c55e">ML Model</span></div>
-
-  <div class="thresh-section-title" style="margin-top:1rem">Feature Importances</div>
-
-  <div class="feat-label-row"><span class="feat-key">rain_3h</span><span class="feat-pct">62.9%</span></div>
-  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:62.9%"></div></div>
-
-  <div class="feat-label-row"><span class="feat-key">total_rain</span><span class="feat-pct">33.4%</span></div>
-  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:33.4%"></div></div>
-
-  <div class="feat-label-row"><span class="feat-key">month</span><span class="feat-pct">3.8%</span></div>
-  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:3.8%"></div></div>
-
-  <div class="feat-label-row"><span class="feat-key">water_level</span><span class="feat-pct">0%</span></div>
-  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:0%"></div></div>
-
-  <div class="feat-label-row"><span class="feat-key">flow_rate</span><span class="feat-pct">0%</span></div>
-  <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:0%"></div></div>
-</div>
-
-<!-- ── SAFE ROUTES PANEL ── -->
 <div class="side-panel" id="routePanel">
-  <div class="panel-header">
-    <div class="panel-title">Safe Route Recommendations</div>
-    <span class="panel-close" onclick="closePanel('routePanel')">✕</span>
-  </div>
-
-  <p class="route-intro">
-    Based on current flood risk at both bridges, FloodGuide recommends the safest
-    crossing routes for Mandaue–Mactan. Updated every 30 minutes from live sensor data.
-  </p>
-
-  <div class="route-select-label">Your Location</div>
-  <select class="route-select" id="routeOrigin">
-    <option value="mandaue">Mandaue City Side</option>
-    <option value="mactan">Mactan / Lapu-Lapu Side</option>
+  <div class="panel-header"><div class="panel-title">Safe Route Planner</div><span class="panel-close" onclick="closePanel('routePanel')">X</span></div>
+  <p class="intro-txt">This planner now uses your exact custom start and end points for Bridge 1, Bridge 2, and the CCLEX fallback, then sends users straight to Google Maps for turn-by-turn directions.</p>
+  <div class="sel-lbl">Travel Direction</div>
+  <select id="routeDirection" class="fsel" onchange="updateRoutePlannerCopy(); if(currentRecommendation){planRoute();}">
+    <option value="mandaue_to_lapu">Mandaue to Lapu-Lapu</option>
+    <option value="lapu_to_mandaue">Lapu-Lapu to Mandaue</option>
   </select>
+  <div class="infobox" id="routeLogicNote" style="margin-bottom:.7rem"></div>
+  <button class="act-btn btn-blue" onclick="planRoute()">Show Recommended Route</button>
+  <button class="act-btn btn-grey" onclick="clearRoutes()">Clear Routes</button>
+  <div class="infobox" id="routeEngineNote">Route handoff: Google Maps directions links use your configured addresses, plus codes, and bridge waypoints.</div>
+  <div id="routeResults"><div class="route-empty">Tap Show Recommended Route to apply the live bridge routing logic.</div></div>
+</div>
 
-  <button class="route-btn" onclick="getRouteRecommendations()">
-    🔍 Get Safe Route Recommendations
-  </button>
-
-  <div id="routeResults">
-    <div class="route-empty">Select your location and tap the button above.</div>
+<div class="side-panel" id="simPanel">
+  <div class="panel-header"><div class="panel-title">Simulate Flood Conditions</div><span class="panel-close" onclick="closePanel('simPanel')">X</span></div>
+  <p class="intro-txt">Inject preset sensor values into both bridges. Data is not saved to the database.</p>
+  <div class="sim-grid">
+    <button class="sim-btn sbl" onclick="simulate('low')">Low Risk</button>
+    <button class="sim-btn sbm" onclick="simulate('moderate')">Moderate</button>
+    <button class="sim-btn sbh" onclick="simulate('high')">High Risk</button>
+    <button class="sim-btn sbr" onclick="simulate('reset')">Reset to Live Data</button>
+  </div>
+  <div class="sim-status" id="simStatus"></div>
+  <div class="infobox">
+    <b style="color:#e2e8f0">Values applied to both bridges:</b><br><br>
+    Low: WL 25 cm, Rain 0.5 mm, Flow 0.1 L<br>
+    Moderate: WL 95 cm, Rain 18 mm, Flow 2.5 L<br>
+    High: WL 165 cm, Rain 38 mm, Flow 5.2 L<br><br>
+    Markers update within 2-3 seconds.
   </div>
 </div>
 
-<!-- ── SCRIPTS ── -->
+<div class="side-panel" id="histPanel">
+  <div class="panel-header"><div class="panel-title">Historical Flood Events</div><span class="panel-close" onclick="closePanel('histPanel')">X</span></div>
+  <p class="intro-txt">Past Moderate and High risk readings. Replaying an event now applies that event severity to both bridge markers so Moderate and High replays visibly change the map.</p>
+  <div class="hist-list" id="histList"><div class="hist-empty">Loading...</div></div>
+</div>
+
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<script src="{{ url_for('static', filename='js/map.js') }}"></script>
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/leaflet-routing-machine.min.js"></script>
 <script>
-// ── PANEL SYSTEM ──
-const PANELS = ['threshPanel', 'mlPanel', 'routePanel'];
+const GOOGLE_MAPS_API_KEY = {{ google_maps_api_key|tojson }};
+const map = L.map('map',{zoomControl:true}).setView([10.315,123.960],13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OpenStreetMap'}).addTo(map);
 
-function togglePanel(id) {
-  const isOpen = document.getElementById(id).classList.contains('open');
-  PANELS.forEach(p => document.getElementById(p).classList.remove('open'));
-  if (!isOpen) document.getElementById(id).classList.add('open');
-}
-
-function closePanel(id) {
-  document.getElementById(id).classList.remove('open');
-}
-
-// ── ML BADGE ──
-function updateMlBadge(isML) {
-  const badge = document.getElementById('mlBadge');
-  const text  = document.getElementById('mlBadgeText');
-  const mode  = document.getElementById('mlCurrentMode');
-  const title = document.getElementById('mlStatusTitle');
-  const sub   = document.getElementById('mlStatusSub');
-
-  if (isML) {
-    badge.className = 'ml-badge ml-active';
-    text.textContent  = 'Random Forest';
-    mode.textContent  = 'ML Model';
-    mode.style.color  = '#22c55e';
-    title.textContent = 'Random Forest Active';
-    title.style.color = '#22c55e';
-    sub.textContent   = 'ML model loaded and predicting';
-  } else {
-    badge.className = 'ml-badge ml-fallback';
-    text.textContent  = 'Rule-Based';
-    mode.textContent  = 'Fallback Rules';
-    mode.style.color  = '#f59e0b';
-    title.textContent = 'Rule-Based Fallback';
-    title.style.color = '#f59e0b';
-    sub.textContent   = 'ML model not loaded — using threshold rules';
+const SITES = {
+  bridge1:{
+    name:'Mandaue-Mactan Bridge 1',
+    marker:[10.326490,123.952142],
+    mandaue_in:[10.329500,123.948500],
+    mactan_out:[10.323000,123.956600]
+  },
+  bridge2:{
+    name:'Marcelo Fernan Bridge',
+    marker:[10.334968,123.960462],
+    mandaue_in:[10.338400,123.956100],
+    mactan_out:[10.331600,123.966900]
+  },
+  cclex:{
+    name:'CCLEX',
+    marker:[10.266000,123.981200],
+    mandaue_in:[10.283000,123.966000],
+    mactan_out:[10.251000,123.999000]
   }
-}
-
-// ── SAFE ROUTES ──
-const ROUTES = {
-  mandaue: [
-    {
-      name: "Mandaue-Mactan Bridge 1 (Old Bridge)",
-      desc: "Via M.L. Quezon Highway → Osmena St → Bridge 1 → Mactan. Most direct route from Mandaue City proper.",
-      bridge: "bridge1"
-    },
-    {
-      name: "Marcelo Fernan Bridge (Bridge 2)",
-      desc: "Via N. Bacalso Ave → Bridge 2 → Lapu-Lapu City. Alternative if Bridge 1 area is at risk.",
-      bridge: "bridge2"
-    },
-    {
-      name: "Via Consolacion — Ferry (Emergency)",
-      desc: "Mandaue → Consolacion → Compostela → Danao Port → Ferry to Mactan. Only if both bridges are flooded.",
-      bridge: null,
-      alwaysSafe: true
-    }
-  ],
-  mactan: [
-    {
-      name: "Marcelo Fernan Bridge (Bridge 2)",
-      desc: "From Lapu-Lapu City via M.L. Quezon Hwy → Bridge 2 → Mandaue. Recommended first option.",
-      bridge: "bridge2"
-    },
-    {
-      name: "Mandaue-Mactan Bridge 1 (Old Bridge)",
-      desc: "Via Mactan Shrine Road → Bridge 1 → Mandaue City. Alternative route.",
-      bridge: "bridge1"
-    },
-    {
-      name: "Mactan-Cebu Ferry (Emergency)",
-      desc: "Lapu-Lapu Port → Pier 1 Cebu City. Use only if both bridges are impassable.",
-      bridge: null,
-      alwaysSafe: true
-    }
-  ]
 };
 
+const ROUTE_ENDPOINTS = {
+  bridge1_mandaue_start:{
+    label:'Shell, A. C. Cortes Ave, Cambaro',
+    address:'Shell, A. C. Cortes Ave, Cambaro, Mandaue City, Cebu',
+    query:'Shell, A. C. Cortes Ave, Cambaro, Mandaue City, Cebu'
+  },
+  bridge1_lapu_end:{
+    label:'Nagali Building II, Lapu-Lapu',
+    address:'Nagali Building II, Lapu-Lapu City, Cebu',
+    query:'Nagali Building II, Lapu-Lapu City, Cebu'
+  },
+  bridge1_lapu_return_start:{
+    label:'Pajo terminal habal habal station',
+    address:'Pajo terminal habal habal station, Lapu-Lapu City, Cebu',
+    query:'Pajo terminal habal habal station, Lapu-Lapu City, Cebu'
+  },
+  serging_veloso_bridge:{
+    label:'Serging Veloso Osmena Jr. Brg',
+    address:'Serging Veloso Osmena Jr. Brg, Mandaue City, Cebu',
+    query:'Serging Veloso Osmena Jr. Brg, Mandaue City, Cebu'
+  },
+  philippine_spring:{
+    label:'Philippine Spring Water Resources, Inc.',
+    address:'Philippine Spring Water Resources, Inc., A. C. Cortes Ave, Cambaro, Mandaue City, Cebu',
+    query:'Philippine Spring Water Resources, Inc., A. C. Cortes Ave, Cambaro, Mandaue City, Cebu'
+  },
+  cclex_bridge1_start:{
+    label:'A. C. Cortes Ave, Mandaue',
+    address:'6014 A. C. Cortes Ave, Mandaue City, Cebu',
+    query:'6014 A. C. Cortes Ave, Mandaue City, Cebu'
+  },
+  bridge2_mandaue_start:{
+    label:'Wilcon Depot, U.N. Ave, Umapad',
+    address:'Wilcon Depot, U.N. Ave, Barangay Umapad, Mandaue City, Cebu',
+    query:'Wilcon Depot, U.N. Ave, Barangay Umapad, Mandaue City, Cebu'
+  },
+  bridge2_lapu_end:{
+    label:'Shell, M.L. Quezon National Highway',
+    address:'Shell, M.L. Quezon National Highway, Lapu-Lapu City, Cebu',
+    query:'Shell, M.L. Quezon National Highway, Lapu-Lapu City, Cebu'
+  },
+  bridge2_lapu_return_start:{
+    label:'Starbucks Shell Pusok Cebu',
+    address:'Starbucks Shell Pusok Cebu, M.L. Quezon National Highway, Lapu-Lapu City, Cebu',
+    query:'Starbucks Shell Pusok Cebu, M.L. Quezon National Highway, Lapu-Lapu City, Cebu'
+  },
+  marcelo_fernan_bridge:{
+    label:'Marcelo Fernan Bridge',
+    address:'Marcelo Fernan Bridge, U.N. Avenue, Mandaue City, Cebu',
+    query:'Marcelo Fernan Bridge, U.N. Avenue, Mandaue City, Cebu'
+  },
+  un_avenue_mandaue:{
+    label:'UN Avenue, Mandaue',
+    address:'UN Avenue, Mandaue City, Cebu',
+    query:'UN Avenue, Mandaue City, Cebu'
+  },
+  mybus_sm_seaside:{
+    label:'MyBus SM Seaside Terminal',
+    address:'7VJJ+QP Cebu City, Cebu',
+    query:'MyBus SM Seaside Terminal, 7VJJ+QP Cebu City, Cebu'
+  },
+  lactodco:{
+    label:'LACTODCO, Purok five star',
+    address:'LACTODCO, Purok five star, Lapu-Lapu City, Cebu',
+    query:'LACTODCO, Purok five star, Lapu-Lapu City, Cebu'
+  },
+  cclex_ramp:{
+    label:'Cebu South Coastal Rd & F. Vestil St',
+    address:'Cebu South Coastal Rd & F. Vestil St, Cebu City, Cebu',
+    query:'Cebu South Coastal Rd & F. Vestil St, Cebu City, Cebu'
+  },
+  cclex_waypoint:{
+    label:'Cebu-Cordova Link Expy',
+    address:'Cebu-Cordova Link Expy, Cebu City, Cebu',
+    query:'Cebu-Cordova Link Expy, Cebu City, Cebu'
+  }
+};
+
+const ROUTE_TEMPLATES = {
+  bridge1_mandaue_to_lapu:{
+    id:'bridge1_mandaue_to_lapu',
+    name:'Bridge 1 Route',
+    color:'#38bdf8',
+    bridgeRiskId:'bridge1',
+    origin: ROUTE_ENDPOINTS.bridge1_mandaue_start,
+    waypoints:[],
+    destination: ROUTE_ENDPOINTS.bridge1_lapu_end
+  },
+  bridge1_lapu_to_mandaue:{
+    id:'bridge1_lapu_to_mandaue',
+    name:'Bridge 1 Return Route',
+    color:'#38bdf8',
+    bridgeRiskId:'bridge1',
+    origin: ROUTE_ENDPOINTS.bridge1_lapu_return_start,
+    waypoints:[ROUTE_ENDPOINTS.serging_veloso_bridge],
+    destination: ROUTE_ENDPOINTS.philippine_spring
+  },
+  bridge2_mandaue_to_lapu:{
+    id:'bridge2_mandaue_to_lapu',
+    name:'Bridge 2 Route',
+    color:'#a855f7',
+    bridgeRiskId:'bridge2',
+    origin: ROUTE_ENDPOINTS.bridge2_mandaue_start,
+    waypoints:[],
+    destination: ROUTE_ENDPOINTS.bridge2_lapu_end
+  },
+  bridge2_lapu_to_mandaue:{
+    id:'bridge2_lapu_to_mandaue',
+    name:'Bridge 2 Return Route',
+    color:'#a855f7',
+    bridgeRiskId:'bridge2',
+    origin: ROUTE_ENDPOINTS.bridge2_lapu_return_start,
+    waypoints:[ROUTE_ENDPOINTS.marcelo_fernan_bridge],
+    destination: ROUTE_ENDPOINTS.un_avenue_mandaue
+  },
+  cclex_mandaue_to_lapu_bridge1:{
+    id:'cclex_mandaue_to_lapu_bridge1',
+    name:'CCLEX Emergency Route from A. C. Cortes',
+    color:'#22c55e',
+    bridgeRiskId:null,
+    origin: ROUTE_ENDPOINTS.cclex_bridge1_start,
+    waypoints:[
+      ROUTE_ENDPOINTS.mybus_sm_seaside,
+      ROUTE_ENDPOINTS.cclex_ramp,
+      ROUTE_ENDPOINTS.cclex_waypoint
+    ],
+    destination: ROUTE_ENDPOINTS.lactodco
+  },
+  cclex_mandaue_to_lapu_bridge2:{
+    id:'cclex_mandaue_to_lapu_bridge2',
+    name:'CCLEX Emergency Route from U.N. Ave',
+    color:'#22c55e',
+    bridgeRiskId:null,
+    origin: ROUTE_ENDPOINTS.bridge2_mandaue_start,
+    waypoints:[
+      ROUTE_ENDPOINTS.mybus_sm_seaside,
+      ROUTE_ENDPOINTS.cclex_ramp,
+      ROUTE_ENDPOINTS.cclex_waypoint
+    ],
+    destination: ROUTE_ENDPOINTS.lactodco
+  },
+  cclex_lapu_to_mandaue_bridge1:{
+    id:'cclex_lapu_to_mandaue_bridge1',
+    name:'CCLEX Return Route to A. C. Cortes',
+    color:'#22c55e',
+    bridgeRiskId:null,
+    origin: ROUTE_ENDPOINTS.lactodco,
+    waypoints:[ROUTE_ENDPOINTS.mybus_sm_seaside],
+    destination: ROUTE_ENDPOINTS.bridge1_mandaue_start
+  },
+  cclex_lapu_to_mandaue_bridge2:{
+    id:'cclex_lapu_to_mandaue_bridge2',
+    name:'CCLEX Return Route to U.N. Ave',
+    color:'#22c55e',
+    bridgeRiskId:null,
+    origin: ROUTE_ENDPOINTS.lactodco,
+    waypoints:[
+      ROUTE_ENDPOINTS.cclex_ramp,
+      ROUTE_ENDPOINTS.mybus_sm_seaside,
+      ROUTE_ENDPOINTS.un_avenue_mandaue
+    ],
+    destination: ROUTE_ENDPOINTS.bridge2_mandaue_start
+  }
+};
+
+const ALL_PANELS = ['routePanel','simPanel','histPanel'];
+function togglePanel(id){
+  const el = document.getElementById(id);
+  const isOpen = el.classList.contains('open');
+  ALL_PANELS.forEach(p=>document.getElementById(p).classList.remove('open'));
+  if(!isOpen){
+    el.classList.add('open');
+    if(id === 'histPanel') loadHistoricalEvents();
+  }
+}
+function closePanel(id){document.getElementById(id).classList.remove('open')}
+map.on('click',()=>ALL_PANELS.forEach(p=>document.getElementById(p).classList.remove('open')));
+
+const markers = {};
 let currentRiskData = {};
 
-async function fetchRiskLevels() {
-  try {
-    const res  = await fetch('/api/map-data');
+function riskHex(color){
+  return {green:'#22c55e',orange:'#f59e0b',red:'#ef4444'}[color] || '#22c55e';
+}
+
+function makeIcon(color){
+  const c = riskHex(color);
+  const pulse = color === 'red' ? 'animation:pulse 1.2s infinite;' : '';
+  return L.divIcon({
+    className:'',
+    html:`<div style="width:20px;height:20px;border-radius:50%;background:${c};border:3px solid #fff;box-shadow:0 0 0 2px ${c}60,0 2px 8px rgba(0,0,0,.5);${pulse}"></div>`,
+    iconSize:[20,20],
+    iconAnchor:[10,10],
+    popupAnchor:[0,-13]
+  });
+}
+
+async function loadMapData(){
+  try{
+    const res = await fetch('/api/map-data');
     const data = await res.json();
     currentRiskData = {};
-    data.locations.forEach(loc => {
+    (data.locations || []).forEach(loc=>{
       currentRiskData[loc.id] = loc.risk_color;
+      if(markers[loc.id]){
+        markers[loc.id].setLatLng([loc.lat,loc.lng]);
+        markers[loc.id].setIcon(makeIcon(loc.risk_color));
+        markers[loc.id].getPopup().setContent(loc.popup_html);
+      } else {
+        markers[loc.id] = L.marker([loc.lat,loc.lng],{icon:makeIcon(loc.risk_color)})
+          .addTo(map)
+          .bindPopup(loc.popup_html,{maxWidth:320});
+      }
     });
+  }catch(e){
+    console.warn('loadMapData:',e);
+  }
+}
+loadMapData();
+setInterval(loadMapData,30000);
+updateRoutePlannerCopy();
 
-    // Detect ML vs rule-based
-    const hasML = data.locations.some(loc => {
-      const m = (loc.popup_html || '').match(/Confidence.*?([\d.]+)%/);
-      const conf = parseFloat(m ? m[1] : '85');
-      return conf !== 85.0 && conf !== 75.0 && conf !== 90.0;
+let activeRoutes = [];
+let routeMarkers = [];
+let currentRecommendation = null;
+let currentSelectedRouteId = null;
+
+function rememberRoute(type, ref){
+  activeRoutes.push({type, ref});
+}
+
+function clearRouteVisuals(){
+  activeRoutes.forEach(item=>{
+    if(item.type === 'control'){
+      map.removeControl(item.ref);
+    } else if(item.type === 'layer' && map.hasLayer(item.ref)){
+      map.removeLayer(item.ref);
+    }
+  });
+  activeRoutes = [];
+  routeMarkers.forEach(m=>map.removeLayer(m));
+  routeMarkers = [];
+}
+
+function clearRoutes(){
+  clearRouteVisuals();
+  currentRecommendation = null;
+  currentSelectedRouteId = null;
+  document.getElementById('routeResults').innerHTML = '<div class="route-empty">Routes cleared.</div>';
+}
+
+function getRouteDirection(){
+  const select = document.getElementById('routeDirection');
+  return select ? select.value : 'mandaue_to_lapu';
+}
+
+function updateRoutePlannerCopy(){
+  const box = document.getElementById('routeLogicNote');
+  if(!box) return;
+  if(getRouteDirection() === 'lapu_to_mandaue'){
+    box.innerHTML =
+      'Automatic logic:<br>' +
+      'Bridge 1 return route: Pajo terminal habal habal station to Philippine Spring Water Resources through Serging Veloso Osmena Jr. Brg.<br>' +
+      'Bridge 2 return route: Starbucks Shell Pusok Cebu to UN Avenue through Marcelo Fernan Bridge.<br>' +
+      'If both bridges flood: use the CCLEX return routes from LACTODCO either to Shell on A. C. Cortes, or through Cebu South Coastal Rd & F. Vestil St, MyBus, and UN Avenue to Wilcon Depot.';
+    return;
+  }
+  box.innerHTML =
+    'Automatic logic:<br>' +
+    'Bridge 1 route: Shell on A. C. Cortes Ave, Cambaro to Nagali Building II, Lapu-Lapu.<br>' +
+    'Bridge 2 route: Wilcon Depot, U.N. Ave, Umapad to Shell on M.L. Quezon National Highway, Lapu-Lapu.<br>' +
+    'If both bridges flood: route through MyBus SM Seaside Terminal, Cebu South Coastal Rd & F. Vestil St, then CCLEX to LACTODCO in Lapu-Lapu.';
+}
+
+function stopQuery(stop){
+  if(stop.query) return stop.query;
+  if(stop.address) return stop.address;
+  if(stop.coords) return stop.coords.join(',');
+  return '';
+}
+
+function buildGoogleMapsDirectionsUrl(route){
+  const origin = stopQuery(route.origin);
+  const destination = stopQuery(route.destination);
+  const waypoints = (route.waypoints || []).map(stop=>stopQuery(stop)).filter(Boolean).join('|');
+  let url = 'https://www.google.com/maps/dir/?api=1&travelmode=driving';
+  url += '&origin=' + encodeURIComponent(origin);
+  url += '&destination=' + encodeURIComponent(destination);
+  if(waypoints){
+    url += '&waypoints=' + encodeURIComponent(waypoints);
+  }
+  return url;
+}
+
+function openRouteInGoogleMaps(routeId){
+  if(!currentRecommendation) return;
+  const route = (currentRecommendation.available || []).find(r=>r.id === routeId);
+  if(!route) return;
+  currentSelectedRouteId = routeId;
+  renderRouteResults();
+  const url = buildGoogleMapsDirectionsUrl(route);
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function riskLvl(id){
+  const c = currentRiskData[id] || 'green';
+  return c === 'red' ? 2 : c === 'orange' ? 1 : 0;
+}
+
+function isBridgeFlooded(id){
+  return riskLvl(id) >= 1;
+}
+
+function addLabelMarker(latlng,label,color){
+  const marker = L.marker(latlng,{
+    icon:L.divIcon({
+      className:'',
+      html:`<div style="background:${color};color:#fff;font-size:.6rem;font-weight:700;padding:3px 8px;border-radius:5px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.4)">${label}</div>`,
+      iconAnchor:[0,0]
+    })
+  }).addTo(map);
+  routeMarkers.push(marker);
+}
+
+const googleRouteState = {service:null, loader:null, available:false, failed:false};
+
+function updateRouteEngineNote(text){
+  document.getElementById('routeEngineNote').textContent = text;
+}
+
+async function ensureGoogleDirections(){
+  if(googleRouteState.service) return googleRouteState.service;
+  if(googleRouteState.failed || !GOOGLE_MAPS_API_KEY){
+    throw new Error('Google Maps key unavailable');
+  }
+  if(!googleRouteState.loader){
+    googleRouteState.loader = new Promise((resolve,reject)=>{
+      const script = document.createElement('script');
+      script.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(GOOGLE_MAPS_API_KEY) + '&libraries=routes&v=weekly';
+      script.async = true;
+      script.defer = true;
+      script.onload = async ()=>{
+        try{
+          if(google.maps.importLibrary){
+            await google.maps.importLibrary('routes');
+          }
+          googleRouteState.service = new google.maps.DirectionsService();
+          googleRouteState.available = true;
+          updateRouteEngineNote('Preferred route engine: Google Maps Directions active.');
+          resolve(googleRouteState.service);
+        }catch(err){
+          googleRouteState.failed = true;
+          updateRouteEngineNote('Google Maps loaded but Directions is unavailable. Using OSRM fallback.');
+          reject(err);
+        }
+      };
+      script.onerror = ()=>{
+        googleRouteState.failed = true;
+        updateRouteEngineNote('Google Maps could not load. Using OSRM fallback.');
+        reject(new Error('Google Maps script failed to load'));
+      };
+      document.head.appendChild(script);
     });
-    updateMlBadge(hasML);
+  }
+  return googleRouteState.loader;
+}
 
-  } catch(e) {
-    console.warn('Risk fetch error:', e);
+async function drawGoogleRoute(waypoints,color,onDone){
+  const service = await ensureGoogleDirections();
+  const request = {
+    origin:{lat:waypoints[0][0],lng:waypoints[0][1]},
+    destination:{lat:waypoints[waypoints.length-1][0],lng:waypoints[waypoints.length-1][1]},
+    waypoints:waypoints.slice(1,-1).map(p=>({location:{lat:p[0],lng:p[1]},stopover:true})),
+    optimizeWaypoints:false,
+    travelMode:google.maps.TravelMode.DRIVING,
+    unitSystem:google.maps.UnitSystem.METRIC,
+    provideRouteAlternatives:false
+  };
+  const result = await service.route(request);
+  const route = result.routes[0];
+  const points = (route.overview_path || []).map(p=>[p.lat(),p.lng()]);
+  const polyline = L.polyline(points,{color,weight:5,opacity:.88}).addTo(map);
+  rememberRoute('layer', polyline);
+  const summary = route.legs.reduce((acc,leg)=>{
+    acc.distance += leg.distance ? leg.distance.value : 0;
+    acc.duration += leg.duration ? leg.duration.value : 0;
+    return acc;
+  },{distance:0,duration:0});
+  if(onDone){
+    onDone((summary.distance / 1000).toFixed(1), Math.round(summary.duration / 60), 'Google Maps');
   }
 }
 
-function riskLevel(color) {
-  if (color === 'red')    return 2;
-  if (color === 'orange') return 1;
-  return 0;
+async function drawGoogleRoutePlan(plan,onDone){
+  const service = await ensureGoogleDirections();
+  const request = {
+    origin:{lat:plan.origin.coords[0],lng:plan.origin.coords[1]},
+    destination:{lat:plan.destination.coords[0],lng:plan.destination.coords[1]},
+    waypoints:plan.waypoints.map(w=>({
+      location:{lat:w.coords[0],lng:w.coords[1]},
+      stopover:true
+    })),
+    optimizeWaypoints:false,
+    travelMode:google.maps.TravelMode.DRIVING,
+    unitSystem:google.maps.UnitSystem.METRIC,
+    provideRouteAlternatives:false
+  };
+  const result = await service.route(request);
+  const route = result.routes[0];
+  const points = (route.overview_path || []).map(p=>[p.lat(),p.lng()]);
+  const polyline = L.polyline(points,{color:plan.color,weight:5,opacity:.9}).addTo(map);
+  rememberRoute('layer', polyline);
+  const summary = route.legs.reduce((acc,leg)=>{
+    acc.distance += leg.distance ? leg.distance.value : 0;
+    acc.duration += leg.duration ? leg.duration.value : 0;
+    return acc;
+  },{distance:0,duration:0});
+  if(onDone){
+    onDone((summary.distance / 1000).toFixed(1), Math.round(summary.duration / 60), 'Google Maps');
+  }
 }
 
-function getRouteRecommendations() {
-  const origin  = document.getElementById('routeOrigin').value;
-  const routes  = ROUTES[origin];
-  const results = document.getElementById('routeResults');
-  const ranks   = ['1st choice', '2nd choice', 'Emergency only'];
-  let html = '';
-
-  routes.forEach((route, i) => {
-    let statusClass = 'status-safe';
-    let statusLabel = 'SAFE TO USE';
-    let cardClass   = '';
-
-    if (route.alwaysSafe) {
-      statusClass = 'status-caution';
-      statusLabel = 'LAST RESORT';
-      cardClass   = 'warning';
-    } else {
-      const rl = riskLevel(currentRiskData[route.bridge] || 'green');
-      if (rl === 2) {
-        statusClass = 'status-avoid'; statusLabel = 'AVOID — FLOODED'; cardClass = 'danger';
-      } else if (rl === 1) {
-        statusClass = 'status-caution'; statusLabel = 'USE WITH CAUTION'; cardClass = 'warning';
+function drawOsrmRoute(waypoints,color,onDone){
+  return new Promise(resolve=>{
+    const ctrl = L.Routing.control({
+      waypoints:waypoints.map(w=>L.latLng(w[0],w[1])),
+      router:L.Routing.osrmv1({
+        serviceUrl:'https://router.project-osrm.org/route/v1',
+        profile:'driving'
+      }),
+      lineOptions:{styles:[{color,weight:5,opacity:.85}],extendToWaypoints:true,missingRouteTolerance:0},
+      createMarker:()=>null,
+      addWaypoints:false,
+      draggableWaypoints:false,
+      fitSelectedRoutes:false,
+      showAlternatives:false,
+      show:false
+    }).addTo(map);
+    rememberRoute('control', ctrl);
+    ctrl.on('routesfound',e=>{
+      const route = e.routes[0];
+      if(onDone){
+        onDone((route.summary.totalDistance / 1000).toFixed(1), Math.round(route.summary.totalTime / 60), 'OSRM');
       }
+      resolve(route);
+    });
+    ctrl.on('routingerror',()=>{
+      if(onDone) onDone(null, null, 'OSRM');
+      resolve(null);
+    });
+  });
+}
+
+async function drawPreferredRoutePlan(plan,onDone){
+  try{
+    await drawGoogleRoutePlan(plan,onDone);
+    return;
+  }catch(err){
+    console.warn('Google route fallback:', err);
+    if(!googleRouteState.available){
+      updateRouteEngineNote('Google Directions unavailable for this key or project. Using OSRM fallback.');
+    }
+  }
+  const fallbackWaypoints = [
+    plan.origin.coords,
+    ...plan.waypoints.map(w=>w.coords),
+    plan.destination.coords
+  ];
+  await drawOsrmRoute(fallbackWaypoints,plan.color,onDone);
+}
+
+function routeBounds(points){
+  return L.latLngBounds(points.map(p=>L.latLng(p[0],p[1])));
+}
+
+function buildRouteRecommendation(){
+  const direction = getRouteDirection();
+  const bridge1Flooded = isBridgeFlooded('bridge1');
+  const bridge2Flooded = isBridgeFlooded('bridge2');
+  if(direction === 'lapu_to_mandaue'){
+    const bridge1Route = {...ROUTE_TEMPLATES.bridge1_lapu_to_mandaue, flooded: bridge1Flooded};
+    const bridge2Route = {...ROUTE_TEMPLATES.bridge2_lapu_to_mandaue, flooded: bridge2Flooded};
+    const cclexBridge1 = {...ROUTE_TEMPLATES.cclex_lapu_to_mandaue_bridge1, flooded: false};
+    const cclexBridge2 = {...ROUTE_TEMPLATES.cclex_lapu_to_mandaue_bridge2, flooded: false};
+
+    if(bridge1Flooded && bridge2Flooded){
+      return {
+        available: [cclexBridge1, cclexBridge2, bridge1Route, bridge2Route],
+        defaultRouteId: 'cclex_lapu_to_mandaue_bridge1',
+        headline: 'Both bridges show flooding. Use the CCLEX return route from LACTODCO through MyBus SM Seaside Terminal, then continue to your Mandaue drop-off.'
+      };
     }
 
-    html += `
-    <div class="route-card ${cardClass}">
-      <div class="route-rank">${ranks[i]}</div>
-      <div class="route-name">${route.name}</div>
-      <div class="route-desc">${route.desc}</div>
-      <span class="route-status ${statusClass}">${statusLabel}</span>
-    </div>`;
-  });
+    if(bridge1Flooded && !bridge2Flooded){
+      return {
+        available: [bridge2Route, bridge1Route, cclexBridge2, cclexBridge1],
+        defaultRouteId: 'bridge2_lapu_to_mandaue',
+        headline: 'Bridge 1 shows flooding. Bridge 2 is recommended for the return trip, while the flooded Bridge 1 route stays visible as Avoid - Flooded.'
+      };
+    }
 
-  // Overall advice banner
-  const b1 = riskLevel(currentRiskData['bridge1'] || 'green');
-  const b2 = riskLevel(currentRiskData['bridge2'] || 'green');
+    if(!bridge1Flooded && bridge2Flooded){
+      return {
+        available: [bridge1Route, bridge2Route, cclexBridge1, cclexBridge2],
+        defaultRouteId: 'bridge1_lapu_to_mandaue',
+        headline: 'Bridge 2 shows flooding. Bridge 1 is recommended for the return trip, while the flooded Bridge 2 route stays visible as Avoid - Flooded.'
+      };
+    }
 
-  if (b1 === 2 && b2 === 2) {
-    html += `<div class="route-card danger" style="margin-top:0.5rem">
-      <div class="route-name" style="color:#ef4444">⚠️ Both Bridges — High Risk</div>
-      <div class="route-desc">Both bridges are currently High flood risk. Do not attempt to cross. Use ferry or wait for conditions to improve.</div>
-    </div>`;
-  } else if (b1 === 0 && b2 === 0) {
-    html += `<div class="route-card" style="margin-top:0.5rem">
-      <div class="route-name" style="color:#22c55e">✅ Conditions Clear</div>
-      <div class="route-desc">Both bridges are currently safe. Conditions are updated every 30 minutes.</div>
-    </div>`;
+    return {
+      available: [bridge1Route, bridge2Route, cclexBridge1, cclexBridge2],
+      defaultRouteId: 'bridge1_lapu_to_mandaue',
+      headline: 'No bridge flooding detected. Bridge 1 is the default return route, while Bridge 2 and both CCLEX return routes stay selectable.'
+    };
   }
 
+  const bridge1Route = {...ROUTE_TEMPLATES.bridge1_mandaue_to_lapu, flooded: bridge1Flooded};
+  const bridge2Route = {...ROUTE_TEMPLATES.bridge2_mandaue_to_lapu, flooded: bridge2Flooded};
+  const cclexBridge1 = {...ROUTE_TEMPLATES.cclex_mandaue_to_lapu_bridge1, flooded: false};
+  const cclexBridge2 = {...ROUTE_TEMPLATES.cclex_mandaue_to_lapu_bridge2, flooded: false};
+
+  if(bridge1Flooded && bridge2Flooded){
+      return {
+        available: [cclexBridge1, cclexBridge2, bridge1Route, bridge2Route],
+        defaultRouteId: 'cclex_mandaue_to_lapu_bridge1',
+      headline: 'Both bridges show flooding. Use the CCLEX emergency route through MyBus SM Seaside Terminal to reach LACTODCO in Lapu-Lapu.'
+      };
+    }
+
+  if(bridge1Flooded && !bridge2Flooded){
+    return {
+      available: [bridge2Route, bridge1Route, cclexBridge2, cclexBridge1],
+      defaultRouteId: 'bridge2_mandaue_to_lapu',
+      headline: 'Bridge 1 shows flooding. Bridge 2 is recommended, while the flooded Bridge 1 route stays visible as Avoid - Flooded.'
+    };
+  }
+
+  if(!bridge1Flooded && bridge2Flooded){
+    return {
+      available: [bridge1Route, bridge2Route, cclexBridge1, cclexBridge2],
+      defaultRouteId: 'bridge1_mandaue_to_lapu',
+      headline: 'Bridge 2 shows flooding. Bridge 1 is recommended, while the flooded Bridge 2 route stays visible as Avoid - Flooded.'
+    };
+  }
+
+  return {
+    available: [bridge1Route, bridge2Route, cclexBridge1, cclexBridge2],
+    defaultRouteId: 'bridge1_mandaue_to_lapu',
+    headline: 'No bridge flooding detected. Bridge 1 is the default Mandaue to Lapu-Lapu route, while Bridge 2 and both CCLEX fallbacks stay selectable.'
+  };
+}
+
+function renderRouteResults(){
+  const results = document.getElementById('routeResults');
+  if(!currentRecommendation){
+    results.innerHTML = '<div class="route-empty">Tap Show Recommended Route to apply the live bridge routing logic.</div>';
+    return;
+  }
+  const available = currentRecommendation.available || [];
+  let html = '<div class="route-card info" style="margin-bottom:.6rem"><div class="route-name" style="color:#38bdf8">Recommended Routes</div><div class="route-desc">' + currentRecommendation.headline + '</div><span class="rs rs-info">SELECT A ROUTE BELOW</span></div>';
+
+  available.forEach((route, index)=>{
+    const isActive = route.id === currentSelectedRouteId;
+    const isRecommended = route.id === currentRecommendation.defaultRouteId;
+    const isFlooded = !!route.flooded;
+    const badge = isFlooded ? 'AVOID - FLOODED' : (isRecommended ? 'RECOMMENDED' : 'AVAILABLE');
+    const badgeClass = isFlooded ? 'rs-avoid' : (isRecommended ? 'rs-safe' : 'rs-caut');
+    const cardTone = isFlooded ? 'danger' : (isRecommended ? 'info' : 'warn');
+    html += '<div class="route-card ' + (isActive ? 'active ' : '') + cardTone + '" id="route-card-' + route.id + '"><div class="route-rank">' + (isRecommended ? 'Top Recommendation' : 'Option ' + (index + 1)) + '</div><div class="route-name" style="color:' + route.color + '">' + route.name + '</div><div class="route-desc" id="route-desc-' + route.id + '">' + route.origin.label + ' to ' + route.destination.label + (isFlooded ? ' • Bridge is flooded, avoid unless absolutely necessary.' : ' • Opens directly in Google Maps.') + '</div><div class="route-actions"><button class="route-open" onclick="openRouteInGoogleMaps(\'' + route.id + '\')">' + (isActive ? 'Open Again in Google Maps' : 'Open in Google Maps') + '</button><span class="rs ' + badgeClass + '">' + badge + '</span></div></div>';
+  });
   results.innerHTML = html;
 }
 
-// Init
-fetchRiskLevels();
-setInterval(fetchRiskLevels, 30000);
+async function planRoute(){
+  clearRouteVisuals();
+  currentRecommendation = buildRouteRecommendation();
+  currentSelectedRouteId = null;
+  renderRouteResults();
+}
+
+async function simulate(level){
+  const status = document.getElementById('simStatus');
+  const banner = document.getElementById('simBanner');
+  try{
+    await fetch('/api/simulate',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({level})
+    });
+    const colors = {
+      low:['#22c55e20','#22c55e'],
+      moderate:['#f59e0b20','#f59e0b'],
+      high:['#ef444420','#ef4444']
+    };
+    if(level === 'reset'){
+      banner.classList.remove('visible');
+      status.className = 'sim-status show';
+      status.style.cssText = 'background:#22c55e20;color:#22c55e';
+      status.textContent = 'Reset to live sensor data';
+    } else {
+      banner.classList.add('visible');
+      banner.textContent = 'SIMULATION ACTIVE - Click to reset';
+      status.className = 'sim-status show';
+      status.style.cssText = 'background:' + colors[level][0] + ';color:' + colors[level][1];
+      status.textContent = 'Simulating ' + level.toUpperCase() + ' flood risk on both bridges...';
+    }
+    setTimeout(loadMapData,600);
+    setTimeout(loadMapData,2000);
+  }catch(e){
+    status.className = 'sim-status show';
+    status.style.cssText = 'background:#ef444420;color:#ef4444';
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function loadHistoricalEvents(){
+  const list = document.getElementById('histList');
+  list.innerHTML = '<div class="hist-empty">Loading...</div>';
+  try{
+    const res = await fetch('/api/historical-events');
+    const data = await res.json();
+    if(!data.events || data.events.length === 0){
+      list.innerHTML = '<div class="hist-empty">No Moderate/High events yet. Use Simulate, then label rows in PHPMyAdmin if you need demo events.</div>';
+      return;
+    }
+    const rbg = {Low:'#22c55e20',Moderate:'#f59e0b20',High:'#ef444420'};
+    const rfg = {Low:'#22c55e',Moderate:'#f59e0b',High:'#ef4444'};
+    const devLabel = {bridge1:'Bridge 1 - Mandaue-Mactan',bridge2:'Bridge 2 - Marcelo Fernan',pagasa:'PAGASA Station'};
+    list.innerHTML = data.events.map(e=>
+      '<div class="hist-item" id="hist-' + e.id + '" onclick="replayEvent(' + e.id + ',this)">' +
+        '<span class="hist-risk" style="background:' + (rbg[e.risk_label] || rbg.Moderate) + ';color:' + (rfg[e.risk_label] || rfg.Moderate) + '">' + e.risk_label + '</span>' +
+        '<div class="hist-ts">' + new Date(e.timestamp).toLocaleString('en-PH') + '</div>' +
+        '<div class="hist-vals">' + parseFloat(e.water_level || 0).toFixed(1) + ' cm, ' + parseFloat(e.total_rain || 0).toFixed(1) + ' mm<br>' + (devLabel[e.device_id] || e.device_id) + '</div>' +
+      '</div>'
+    ).join('');
+  }catch(e){
+    list.innerHTML = '<div class="hist-empty">Failed: ' + e.message + '</div>';
+  }
+}
+
+async function replayEvent(id,el){
+  document.querySelectorAll('.hist-item').forEach(i=>i.classList.remove('replaying'));
+  el.classList.add('replaying');
+  try{
+    const res = await fetch('/api/replay-event',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id})
+    });
+    const data = await res.json();
+    if(data.error){
+      console.error('Replay:',data.error);
+      return;
+    }
+    const ts = new Date(data.timestamp).toLocaleString('en-PH');
+    const devLabel = {bridge1:'Bridge 1',bridge2:'Bridge 2'};
+    const replayed = (data.replayed || []).map(item=>
+      (devLabel[item.device_id] || item.device_id) + ' WL ' + parseFloat(item.water_level || 0).toFixed(1) + ' cm / Rain ' + parseFloat(item.total_rain || 0).toFixed(1) + ' mm'
+    ).join(' | ');
+    const banner = document.getElementById('simBanner');
+    banner.classList.add('visible');
+    banner.textContent = 'REPLAYING HISTORY: ' + ts + ' - ' + replayed + ' - Click to reset';
+    setTimeout(loadMapData,600);
+    setTimeout(loadMapData,2000);
+  }catch(e){
+    console.error('Replay error:',e);
+  }
+}
+
+if(GOOGLE_MAPS_API_KEY){
+  updateRouteEngineNote('Preferred route engine: attempting Google Maps Directions, with OSRM fallback.');
+  ensureGoogleDirections().catch(()=>{});
+} else {
+  updateRouteEngineNote('No Google Maps key configured. Using OSRM fallback.');
+}
 </script>
 </body>
 </html>
