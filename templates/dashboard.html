@@ -115,12 +115,7 @@
     .rf-title{font-size:.85rem;font-weight:600;margin-bottom:.1rem}
     .rf-sub{font-size:.65rem;color:#64748b}
 
-    /* ── ACTUAL VS PREDICTED ── */
-    .avp-wrap{overflow-x:auto}
-    .avp-tbl{width:100%;border-collapse:collapse;font-size:.62rem}
-    .avp-tbl th{color:#64748b;text-align:left;padding:.28rem .32rem;border-bottom:1px solid #334155;font-weight:500;text-transform:uppercase;letter-spacing:.04em}
-    .avp-tbl td{padding:.3rem .32rem;border-bottom:1px solid #1e293b;color:#94a3b8}
-    .avp-tbl tr:last-child td{border-bottom:none}
+    /* ── TRAINING MODE ── */
     .accuracy-box{background:#0a0f1e;border-radius:7px;padding:.85rem;margin-bottom:.85rem;text-align:center}
     .acc-pct{font-size:2.4rem;font-weight:700;line-height:1}
     .acc-lbl{font-size:.6rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.2rem}
@@ -129,8 +124,12 @@
     .cc{background:#0a0f1e;border-radius:6px;padding:.45rem;text-align:center}
     .cn{font-size:1.1rem;font-weight:700}
     .cl{font-size:.57rem;color:#64748b;margin-top:.1rem}
-    .my{color:#22c55e;font-weight:700}
-    .mn{color:#ef4444;font-weight:700}
+    .train-actions{display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem}
+    .train-note{background:#0a0f1e;border-radius:7px;padding:.85rem;color:#94a3b8;font-size:.72rem;line-height:1.6}
+    .train-status{margin-top:.85rem}
+    .train-ok{color:#22c55e}
+    .train-warn{color:#f59e0b}
+    .train-muted{color:#64748b}
   </style>
 </head>
 <body>
@@ -188,11 +187,13 @@
       </div>
     </div>
     <div class="rf-row"><span class="rf-k">Algorithm</span><span class="rf-v">Random Forest Classifier</span></div>
-    <div class="rf-row"><span class="rf-k">Trees</span><span class="rf-v">300 estimators</span></div>
-    <div class="rf-row"><span class="rf-k">Max depth</span><span class="rf-v">10 levels</span></div>
-    <div class="rf-row"><span class="rf-k">Training data</span><span class="rf-v">PAGASA 2020–2024</span></div>
-    <div class="rf-row"><span class="rf-k">Training samples</span><span class="rf-v">1,461 daily records</span></div>
-    <div class="rf-row"><span class="rf-k">Model accuracy</span><span class="rf-v" style="color:#22c55e">99%</span></div>
+    <div class="rf-row"><span class="rf-k">Trees</span><span class="rf-v">200 estimators</span></div>
+    <div class="rf-row"><span class="rf-k">Max depth</span><span class="rf-v">8 levels</span></div>
+    <div class="rf-row"><span class="rf-k">Training data</span><span class="rf-v">Bootstrap dataset + optional PAGASA CSV</span></div>
+    <div class="rf-row"><span class="rf-k">Training samples</span><span class="rf-v" id="rfTrainSamples">Built from historical sensor rows</span></div>
+    <div class="rf-row"><span class="rf-k">Training mode</span><span class="rf-v" style="color:#38bdf8">Threshold bootstrap then retrain</span></div>
+    <div class="rf-row"><span class="rf-k">Estimated accuracy</span><span class="rf-v" id="rfEvalAccuracy" style="color:#64748b">Build dataset first</span></div>
+    <div class="rf-row"><span class="rf-k">Evaluation method</span><span class="rf-v" id="rfEvalMethod">Waiting for enough classes</span></div>
     <div class="rf-row"><span class="rf-k">Output classes</span><span class="rf-v">Low / Moderate / High</span></div>
     <div class="rf-row"><span class="rf-k">Fallback</span><span class="rf-v">Rule-based thresholds</span></div>
     <div style="margin-top:.85rem;font-size:.6rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem">Feature Importances</div>
@@ -365,13 +366,15 @@
   </div>
 
   <div class="table-card">
-    <div class="table-title">Actual vs Predicted</div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:.85rem;flex-wrap:wrap">
-      <div style="font-size:.7rem;color:#64748b">Compares stored flood labels against the current Random Forest output on historical readings.</div>
-      <button class="tbtn rfbtn" onclick="loadAvp()">Refresh Comparison</button>
+    <div class="table-title">Training Mode</div>
+    <div style="font-size:.7rem;color:#64748b;margin-bottom:.85rem">Build a separate bootstrap dataset from historical sensor readings, then retrain the Random Forest from that dataset. Optional PAGASA CSV rows are added automatically if a file is available later.</div>
+    <div class="train-actions">
+      <button class="tbtn rfbtn" onclick="buildBootstrapDataset()">Build Bootstrap Dataset</button>
+      <button class="tbtn rfbtn" onclick="retrainModel()">Retrain Model</button>
+      <button class="tbtn" onclick="loadTrainingMode()">Refresh Training Status</button>
     </div>
-    <div id="avpContent">
-      <div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>
+    <div id="trainingModeContent">
+      <div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>
     </div>
   </div>
 </div>
@@ -502,25 +505,103 @@ function fmtTs(iso){
   return new Date(iso).toLocaleString('en-PH',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 }
 
-async function loadAvp(){
-  const content=document.getElementById('avpContent');
-  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Running model on database...</div>';
+function trainingClassLine(classCounts){
+  return 'Low '+(classCounts[0]||0)+' • Moderate '+(classCounts[1]||0)+' • High '+(classCounts[2]||0);
+}
+
+function renderTrainingMode(data,message){
+  const content=document.getElementById('trainingModeContent');
+  if(data.error){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">'+data.error+'</div>';
+    return;
+  }
+  const classCounts=(data.class_counts||data.training_status?.class_counts||{});
+  const sources=data.sources||data.training_status?.sources||{};
+  const bootstrapRows=data.bootstrap_rows??data.training_status?.bootstrap_rows??0;
+  const modelLoaded=!!(data.model_loaded??data.training_status?.model_loaded);
+  const lastBuilt=data.last_built_at||data.training_status?.last_built_at;
+  const evaluation=data.evaluation||data.training_status?.evaluation||{};
+  const lastBuiltText=lastBuilt?fmtTs(lastBuilt):'—';
+  const statusTone=modelLoaded?'#22c55e':(bootstrapRows>0?'#f59e0b':'#64748b');
+  const statusText=modelLoaded?'Model ready for ML predictions':(bootstrapRows>0?'Bootstrap dataset ready, retraining still needed':'Bootstrap dataset has not been built yet');
+  const note=message?'<div class="train-note" style="margin-bottom:.85rem">'+message+'</div>':'';
+  const evalReady=!!evaluation.ready;
+  const evalAccuracy=evalReady?evaluation.accuracy+'%':'—';
+  const evalBalanced=evalReady?evaluation.balanced_accuracy+'%':'n/a';
+  const evalMethod=evalReady?(evaluation.evaluation_method||'Cross-validation'):(evaluation.reason||'Waiting for enough classes');
+  content.innerHTML=
+    note+
+    '<div class="accuracy-box">'+
+      '<div class="acc-pct" style="color:'+(evalReady?'#22c55e':statusTone)+'">'+(evalReady?evalAccuracy:bootstrapRows)+'</div>'+
+      '<div class="acc-lbl">'+(evalReady?'System Accuracy Estimate':'Bootstrap Training Rows')+'</div>'+
+      '<div class="acc-sub">'+statusText+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Balanced accuracy: '+evalBalanced+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Class mix: '+trainingClassLine(classCounts)+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Optional PAGASA rows: '+(sources.pagasa_rows||0)+(sources.pagasa_enabled&&!sources.pagasa_rows?' (file not loaded yet)':'')+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Evaluation: '+evalMethod+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Last bootstrap build: '+lastBuiltText+'</div>'+
+    '</div>'+
+    '<div class="cg">'+
+      '<div class="cc"><div class="cn train-ok">'+(classCounts[0]||0)+'</div><div class="cl">Low training rows</div></div>'+
+      '<div class="cc"><div class="cn train-warn">'+(classCounts[1]||0)+'</div><div class="cl">Moderate training rows</div></div>'+
+      '<div class="cc"><div class="cn" style="color:#ef4444">'+(classCounts[2]||0)+'</div><div class="cl">High training rows</div></div>'+
+    '</div>'+
+    '<div class="train-note train-status">Source rows: Bootstrap '+bootstrapRows+', PAGASA '+(sources.pagasa_rows||0)+'. Build the bootstrap dataset first, then retrain the model whenever new readings are added.</div>';
+
+  const rfTrainSamples=document.getElementById('rfTrainSamples');
+  const rfEvalAccuracy=document.getElementById('rfEvalAccuracy');
+  const rfEvalMethod=document.getElementById('rfEvalMethod');
+  if(rfTrainSamples) rfTrainSamples.textContent='Bootstrap ' + bootstrapRows + ' rows, PAGASA ' + (sources.pagasa_rows||0) + ' rows';
+  if(rfEvalAccuracy){
+    rfEvalAccuracy.textContent=evalReady?evalAccuracy:'Not ready';
+    rfEvalAccuracy.style.color=evalReady?'#22c55e':'#64748b';
+  }
+  if(rfEvalMethod) rfEvalMethod.textContent=evalMethod;
+}
+
+async function loadTrainingMode(){
+  const content=document.getElementById('trainingModeContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>';
   try{
-    const res=await fetch('/api/actual-vs-predicted');
+    const res=await fetch('/api/training-mode-status');
     const data=await res.json();
-    if(data.error){
-      content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">'+data.error+'</div>';
+    renderTrainingMode(data);
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
+async function buildBootstrapDataset(){
+  const content=document.getElementById('trainingModeContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Building bootstrap dataset...</div>';
+  try{
+    const res=await fetch('/api/bootstrap-dataset',{method:'POST'});
+    const data=await res.json();
+    if(data.status!=='success'){
+      content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">'+(data.message||'Bootstrap build failed.')+'</div>';
       return;
     }
-    const accColor=data.accuracy>=90?'#22c55e':data.accuracy>=70?'#f59e0b':'#ef4444';
-    const c=data.confusion;
-    const riskColor=r=>r==='High'?'#ef4444':r==='Moderate'?'#f59e0b':'#22c55e';
-    let rows='';
-    data.rows.forEach(r=>{
-      const ts=new Date(r.timestamp).toLocaleString('en-PH',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});
-      rows+='<tr><td>'+ts+'</td><td style="color:'+riskColor(r.actual)+';font-weight:600">'+r.actual+'</td><td style="color:'+riskColor(r.predicted)+';font-weight:600">'+r.predicted+'</td><td>'+r.confidence+'%</td><td class="'+(r.match?'my':'mn')+'">'+(r.match?'V':'X')+'</td></tr>';
-    });
-    content.innerHTML='<div class="accuracy-box"><div class="acc-pct" style="color:'+accColor+'">'+data.accuracy+'%</div><div class="acc-lbl">Overall Accuracy</div><div class="acc-sub">'+data.correct+' correct out of '+data.total+' predictions</div></div><div class="sec-title">Correct Predictions</div><div class="cg"><div class="cc"><div class="cn" style="color:#22c55e">'+c.low_correct+'</div><div class="cl">Low V</div></div><div class="cc"><div class="cn" style="color:#f59e0b">'+c.mod_correct+'</div><div class="cl">Moderate V</div></div><div class="cc"><div class="cn" style="color:#ef4444">'+c.high_correct+'</div><div class="cl">High V</div></div></div><div class="sec-title">Misclassifications</div><div class="cg" style="margin-bottom:.85rem"><div class="cc"><div class="cn" style="color:#64748b">'+(c.low_as_moderate+c.low_as_high)+'</div><div class="cl">Low wrong</div></div><div class="cc"><div class="cn" style="color:#64748b">'+(c.mod_as_low+c.mod_as_high)+'</div><div class="cl">Mod wrong</div></div><div class="cc"><div class="cn" style="color:#64748b">'+(c.high_as_low+c.high_as_moderate)+'</div><div class="cl">High wrong</div></div></div><div class="sec-title">Last '+data.rows.length+' Readings</div><div class="avp-wrap" style="margin-top:.45rem"><table class="avp-tbl"><thead><tr><th>Time</th><th>Actual</th><th>Predicted</th><th>Conf</th><th>V</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    renderTrainingMode(data.training_status,data.message);
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
+async function retrainModel(){
+  const content=document.getElementById('trainingModeContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Retraining model...</div>';
+  try{
+    const res=await fetch('/retrain',{method:'POST'});
+    const data=await res.json();
+    if(data.status==='success'){
+      await loadDashboard();
+      await loadTrainingMode();
+      renderTrainingMode({
+        ...(await (await fetch('/api/training-mode-status')).json())
+      },data.message);
+      return;
+    }
+    renderTrainingMode(await (await fetch('/api/training-mode-status')).json(),data.message||data.reason||'Retraining skipped.');
   }catch(e){
     content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
   }
@@ -581,9 +662,9 @@ async function loadDashboard(){
 }
 
 loadDashboard();
-loadAvp();
+loadTrainingMode();
 setInterval(loadDashboard,30000);
-setInterval(loadAvp,30000);
+setInterval(loadTrainingMode,30000);
 </script>
 </body>
 </html>
