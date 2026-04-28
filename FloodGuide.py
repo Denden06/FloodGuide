@@ -1576,13 +1576,45 @@ def actual_vs_predicted():
         from sklearn.metrics import accuracy_score, balanced_accuracy_score
         from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
+        def empty_comparison_response(message, source_meta=None, class_counts=None):
+            counts = class_counts or {}
+            return jsonify({
+                "setup_required": True,
+                "message": message,
+                "accuracy": 0.0,
+                "balanced_accuracy": None,
+                "correct": 0,
+                "total": 0,
+                "confusion": {
+                    "low_correct": 0,
+                    "mod_correct": 0,
+                    "high_correct": 0,
+                    "low_as_moderate": 0,
+                    "low_as_high": 0,
+                    "mod_as_low": 0,
+                    "mod_as_high": 0,
+                    "high_as_low": 0,
+                    "high_as_moderate": 0,
+                },
+                "rows": [],
+                "class_counts": counts,
+                "prediction_counts": {},
+                "evaluation_method": message,
+                "sources": source_meta or {},
+                "error": None,
+            }), 200
+
         df, source_meta = load_labelled_training_data(limit_db=600)
 
         if df.empty:
-            return jsonify({"error": "No labelled data in database"}), 200
+            return empty_comparison_response("No labelled data in database", source_meta, {})
 
         if len(df) < 30:
-            return jsonify({"error": f"Only {len(df)} labelled rows available. Need at least 30 for a fair comparison."}), 200
+            return empty_comparison_response(
+                f"Only {len(df)} labelled rows available. Need at least 30 for a fair comparison.",
+                source_meta,
+                {}
+            )
 
         features = ["total_rain", "water_level", "flow_rate",
                     "rain_3h", "rise_rate", "month"]
@@ -1655,30 +1687,27 @@ def actual_vs_predicted():
         )
 
         if len(class_counts) < 2:
-            return jsonify({
-                "setup_required": True,
-                "message": "Actual vs Predicted will appear after the dataset includes at least two labelled flood classes.",
-                "class_counts": class_counts,
-                "sources": source_meta,
-            }), 200
+            return empty_comparison_response(
+                "Actual vs Predicted will appear after the dataset includes at least two labelled flood classes.",
+                source_meta,
+                class_counts
+            )
 
         min_class_count = min(class_counts.values())
         if min_class_count < 2:
-            return jsonify({
-                "setup_required": True,
-                "message": "Actual vs Predicted needs at least two labelled rows in each available flood class before cross-validation can run.",
-                "class_counts": class_counts,
-                "sources": source_meta,
-            }), 200
+            return empty_comparison_response(
+                "Actual vs Predicted needs at least two labelled rows in each available flood class before cross-validation can run.",
+                source_meta,
+                class_counts
+            )
 
         n_splits = min(5, int(min_class_count))
         if n_splits < 2:
-            return jsonify({
-                "setup_required": True,
-                "message": "Actual vs Predicted needs more class diversity before cross-validation can run.",
-                "class_counts": class_counts,
-                "sources": source_meta,
-            }), 200
+            return empty_comparison_response(
+                "Actual vs Predicted needs more class diversity before cross-validation can run.",
+                source_meta,
+                class_counts
+            )
 
         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         y_predicted = cross_val_predict(fallback_model, X, y_actual, cv=cv, method="predict")
@@ -1694,7 +1723,31 @@ def actual_vs_predicted():
 
     except Exception as e:
         print(f"❌ Actual vs Predicted error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "setup_required": True,
+            "message": "Actual vs Predicted is temporarily unavailable.",
+            "accuracy": 0.0,
+            "balanced_accuracy": None,
+            "correct": 0,
+            "total": 0,
+            "confusion": {
+                "low_correct": 0,
+                "mod_correct": 0,
+                "high_correct": 0,
+                "low_as_moderate": 0,
+                "low_as_high": 0,
+                "mod_as_low": 0,
+                "mod_as_high": 0,
+                "high_as_low": 0,
+                "high_as_moderate": 0,
+            },
+            "rows": [],
+            "class_counts": {},
+            "prediction_counts": {},
+            "evaluation_method": str(e),
+            "sources": {},
+            "error": str(e),
+        }), 200
 
 @app.route("/")
 def home():
