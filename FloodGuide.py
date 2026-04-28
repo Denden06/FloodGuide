@@ -29,7 +29,12 @@ def get_db_connection():
 # =========================================
 API_KEY    = "e2a8ee9c6e8ec237763497022a1309bb"
 MODEL_PATH = "model_class.pkl"
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+PAGASA_DATASET_PATH = os.getenv("PAGASA_DATASET_PATH", "pagasa_labeled.csv")
+BOOTSTRAP_TABLE = "bootstrap_training_data"
+GOOGLE_MAPS_API_KEY = os.getenv(
+    "GOOGLE_MAPS_API_KEY",
+    "AIzaSyBfyF6DofStbAoUKcG83eEBE72OpaLqTus"
+)
 
 # Separate in-memory state for each bridge
 latest_sensor_data = {
@@ -48,6 +53,8 @@ latest_sensor_data = {
         "rise_rate":   0.0
     }
 }
+
+SIMULATION_BRIDGE_IDS = ("bridge1", "bridge2")
 
 MONITORED_SITES = [
     {"id": "bridge1", "name": "Mandaue-Mactan Bridge 1", "lat": 10.326490, "lng": 123.952142},
@@ -90,6 +97,436 @@ def load_model():
     else:
         print("❌ model_class.pkl not found!")
         return None
+
+
+def prepare_feature_frame(df):
+    if df is None or df.empty:
+        return df
+
+    work = df.copy()
+    work["timestamp"] = pd.to_datetime(work["timestamp"])
+
+    sort_cols = ["timestamp"]
+    if "device_id" in work.columns:
+        sort_cols = ["device_id", "timestamp"]
+    if "id" in work.columns:
+        sort_cols.append("id")
+
+    work = work.sort_values(sort_cols).reset_index(drop=True)
+
+    if "device_id" in work.columns:
+        work["rain_3h"] = work.groupby("device_id")["total_rain"].transform(
+            lambda s: s.rolling(window=3, min_periods=1).sum()
+        )
+        work["rise_rate"] = work.groupby("device_id")["water_level"].diff().fillna(0)
+    else:
+        work["rain_3h"] = work["total_rain"].rolling(window=3, min_periods=1).sum()
+        work["rise_rate"] = work["water_level"].diff().fillna(0)
+
+    work["month"] = work["timestamp"].dt.month
+
+    final_sort = ["timestamp"]
+    if "id" in work.columns:
+        final_sort.append("id")
+
+    return work.sort_values(final_sort).reset_index(drop=True).fillna(0)
+
+
+def normalize_flood_label(value):
+    if pd.isna(value):
+        return None
+    text = str(value).strip().lower()
+    label_map = {
+        "0": 0, "low": 0, "low risk": 0,
+        "1": 1, "moderate": 1, "moderate risk": 1, "medium": 1,
+        "2": 2, "high": 2, "high risk": 2,
+    }
+    if text in label_map:
+        return label_map[text]
+    try:
+        numeric = int(float(text))
+        return numeric if numeric in (0, 1, 2) else None
+    except Exception:
+        return None
+
+
+def load_pagasa_dataset():
+    if not PAGASA_DATASET_PATH or not os.path.exists(PAGASA_DATASET_PATH):
+        return pd.DataFrame(), {"enabled": False, "path": PAGASA_DATASET_PATH, "rows": 0}
+
+    try:
+        raw = pd.read_csv(PAGASA_DATASET_PATH)
+        if raw.empty:
+            return pd.DataFrame(), {"enabled": True, "path": PAGASA_DATASET_PATH, "rows": 0}
+
+        normalized = raw.copy()
+        normalized.columns = [
+            str(col).strip().lower().replace(" ", "_").replace("-", "_")
+            for col in normalized.columns
+        ]
+
+        alias_map = {
+            "timestamp": ["timestamp", "date", "datetime"],
+            "total_rain": ["total_rain", "rainfall", "rain_mm", "rain", "precipitation"],
+            "water_level": ["water_level", "waterlevel", "wl", "flood_level"],
+            "flow_rate": ["flow_rate", "flow", "flowrate", "flow_l"],
+            "flooded": ["flooded", "label", "risk", "risk_label", "class"],
+            "device_id": ["device_id", "station", "station_id", "source_device"],
+        }
+
+        selected = {}
+        for target, aliases in alias_map.items():
+            match = next((name for name in aliases if name in normalized.columns), None)
+            if match:
+                selected[target] = normalized[match]
+
+        required = {"timestamp", "total_rain", "water_level", "flooded"}
+        if not required.issubset(selected.keys()):
+            missing = sorted(required - set(selected.keys()))
+            print(f"⚠️ PAGASA dataset missing required columns: {missing}")
+            return pd.DataFrame(), {
+                "enabled": True,
+                "path": PAGASA_DATASET_PATH,
+                "rows": 0,
+                "error": f"Missing columns: {', '.join(missing)}"
+            }
+
+        df = pd.DataFrame(selected)
+        if "flow_rate" not in df.columns:
+            df["flow_rate"] = 0.0
+        if "device_id" not in df.columns:
+            df["device_id"] = "pagasa"
+
+        df["source"] = "pagasa"
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        df["total_rain"] = pd.to_numeric(df["total_rain"], errors="coerce")
+        df["water_level"] = pd.to_numeric(df["water_level"], errors="coerce")
+        df["flow_rate"] = pd.to_numeric(df["flow_rate"], errors="coerce").fillna(0.0)
+        df["flooded"] = df["flooded"].apply(normalize_flood_label)
+        df = df.dropna(subset=["timestamp", "total_rain", "water_level", "flooded"]).copy()
+        df["flooded"] = df["flooded"].astype(int)
+        df["id"] = -1 * (pd.RangeIndex(start=1, stop=len(df) + 1))
+        df = df[["id", "timestamp", "device_id", "total_rain", "water_level", "flow_rate", "flooded", "source"]]
+
+        return df, {
+            "enabled": True,
+            "path": PAGASA_DATASET_PATH,
+            "rows": len(df)
+        }
+    except Exception as e:
+        print(f"⚠️ Could not load PAGASA dataset: {e}")
+        return pd.DataFrame(), {
+            "enabled": True,
+            "path": PAGASA_DATASET_PATH,
+            "rows": 0,
+            "error": str(e)
+        }
+
+
+def load_labelled_training_data(limit_db=None):
+    conn = get_db_connection()
+    query = """
+        SELECT id, timestamp, device_id, total_rain, water_level, flow_rate, flooded
+        FROM sensor_readings
+        WHERE flooded IS NOT NULL
+        ORDER BY timestamp ASC
+    """
+    if isinstance(limit_db, int) and limit_db > 0:
+        query = f"""
+            SELECT id, timestamp, device_id, total_rain, water_level, flow_rate, flooded
+            FROM (
+                SELECT id, timestamp, device_id, total_rain, water_level, flow_rate, flooded
+                FROM sensor_readings
+                WHERE flooded IS NOT NULL
+                ORDER BY timestamp DESC
+                LIMIT {int(limit_db)}
+            ) recent_rows
+            ORDER BY timestamp ASC
+        """
+
+    db_df = pd.read_sql(query, conn)
+    conn.close()
+
+    if not db_df.empty:
+        db_df["source"] = "database"
+
+    pagasa_df, pagasa_meta = load_pagasa_dataset()
+
+    frames = []
+    if not db_df.empty:
+        frames.append(db_df)
+    if not pagasa_df.empty:
+        frames.append(pagasa_df)
+
+    if not frames:
+        return pd.DataFrame(), {
+            "database_rows": 0,
+            "pagasa_rows": pagasa_meta.get("rows", 0),
+            "pagasa_enabled": pagasa_meta.get("enabled", False),
+            "pagasa_path": pagasa_meta.get("path", PAGASA_DATASET_PATH),
+            "pagasa_error": pagasa_meta.get("error"),
+        }
+
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    combined = prepare_feature_frame(combined)
+    combined["flooded"] = pd.to_numeric(combined["flooded"], errors="coerce")
+    combined = combined[combined["flooded"].isin([0, 1, 2])].copy()
+
+    meta = {
+        "database_rows": 0 if db_df.empty else len(db_df),
+        "pagasa_rows": pagasa_meta.get("rows", 0),
+        "pagasa_enabled": pagasa_meta.get("enabled", False),
+        "pagasa_path": pagasa_meta.get("path", PAGASA_DATASET_PATH),
+        "pagasa_error": pagasa_meta.get("error"),
+    }
+    return combined, meta
+
+
+def ensure_bootstrap_table():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS {BOOTSTRAP_TABLE} (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            reading_id BIGINT NULL,
+            device_id VARCHAR(32) NOT NULL,
+            timestamp DATETIME NOT NULL,
+            total_rain FLOAT NOT NULL DEFAULT 0,
+            water_level FLOAT NOT NULL DEFAULT 0,
+            flow_rate FLOAT NOT NULL DEFAULT 0,
+            rain_3h FLOAT NOT NULL DEFAULT 0,
+            rise_rate FLOAT NOT NULL DEFAULT 0,
+            flooded TINYINT NOT NULL,
+            label_origin VARCHAR(64) NOT NULL DEFAULT 'threshold_bootstrap',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_bootstrap_reading (reading_id, device_id)
+        )
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def bootstrap_label_from_features(row):
+    wl = float(row.get("water_level", 0) or 0)
+    flow = float(row.get("flow_rate", 0) or 0)
+    rain_3h = float(row.get("rain_3h", row.get("total_rain", 0)) or 0)
+    rise = float(row.get("rise_rate", 0) or 0)
+
+    if wl > 150 or rain_3h > 50 or (rise > 10 and wl > 100):
+        return 2
+    if wl > 80 or rain_3h > 20 or flow > 3.0:
+        return 1
+    return 0
+
+
+def rebuild_bootstrap_dataset():
+    ensure_bootstrap_table()
+
+    conn = get_db_connection()
+    sensor_df = pd.read_sql(
+        """SELECT id, timestamp, device_id, total_rain, water_level, flow_rate
+           FROM sensor_readings
+           ORDER BY timestamp ASC""",
+        conn
+    )
+
+    if sensor_df.empty:
+        conn.close()
+        return {
+            "rows_written": 0,
+            "class_counts": {0: 0, 1: 0, 2: 0},
+            "message": "No sensor_readings rows available to bootstrap."
+        }
+
+    sensor_df = prepare_feature_frame(sensor_df)
+    sensor_df["flooded"] = sensor_df.apply(bootstrap_label_from_features, axis=1)
+    sensor_df["label_origin"] = "threshold_bootstrap"
+
+    rows = []
+    for _, row in sensor_df.iterrows():
+        ts = row["timestamp"].to_pydatetime() if hasattr(row["timestamp"], "to_pydatetime") else row["timestamp"]
+        rows.append((
+            int(row["id"]) if not pd.isna(row["id"]) else None,
+            str(row.get("device_id", "bridge1") or "bridge1"),
+            ts,
+            float(row.get("total_rain", 0) or 0),
+            float(row.get("water_level", 0) or 0),
+            float(row.get("flow_rate", 0) or 0),
+            float(row.get("rain_3h", 0) or 0),
+            float(row.get("rise_rate", 0) or 0),
+            int(row.get("flooded", 0) or 0),
+            str(row.get("label_origin", "threshold_bootstrap"))
+        ))
+
+    cursor = conn.cursor()
+    cursor.execute(f"DELETE FROM {BOOTSTRAP_TABLE}")
+    cursor.executemany(
+        f"""
+        INSERT INTO {BOOTSTRAP_TABLE}
+        (reading_id, device_id, timestamp, total_rain, water_level, flow_rate,
+         rain_3h, rise_rate, flooded, label_origin)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        rows
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    class_counts = sensor_df["flooded"].astype(int).value_counts().sort_index().to_dict()
+    return {
+        "rows_written": len(rows),
+        "class_counts": {0: int(class_counts.get(0, 0)), 1: int(class_counts.get(1, 0)), 2: int(class_counts.get(2, 0))},
+        "message": f"Bootstrap dataset rebuilt from {len(rows)} sensor rows."
+    }
+
+
+def load_bootstrap_training_data():
+    ensure_bootstrap_table()
+    conn = get_db_connection()
+    bootstrap_df = pd.read_sql(
+        f"""SELECT id, reading_id, timestamp, device_id, total_rain, water_level,
+                  flow_rate, rain_3h, rise_rate, flooded, label_origin, updated_at
+           FROM {BOOTSTRAP_TABLE}
+           ORDER BY timestamp ASC""",
+        conn
+    )
+    conn.close()
+
+    if not bootstrap_df.empty:
+        bootstrap_df["source"] = "bootstrap"
+        bootstrap_df["timestamp"] = pd.to_datetime(bootstrap_df["timestamp"])
+        bootstrap_df["month"] = bootstrap_df["timestamp"].dt.month
+        bootstrap_df = bootstrap_df.fillna(0)
+
+    pagasa_df, pagasa_meta = load_pagasa_dataset()
+    if not pagasa_df.empty:
+        pagasa_df = prepare_feature_frame(pagasa_df)
+    frames = []
+    if not bootstrap_df.empty:
+        frames.append(bootstrap_df)
+    if not pagasa_df.empty:
+        frames.append(pagasa_df)
+
+    combined = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+    if not combined.empty:
+        combined = prepare_feature_frame(combined)
+        combined["flooded"] = pd.to_numeric(combined["flooded"], errors="coerce")
+        combined = combined[combined["flooded"].isin([0, 1, 2])].copy()
+
+    meta = {
+        "bootstrap_rows": 0 if bootstrap_df.empty else len(bootstrap_df),
+        "pagasa_rows": pagasa_meta.get("rows", 0),
+        "pagasa_enabled": pagasa_meta.get("enabled", False),
+        "pagasa_path": pagasa_meta.get("path", PAGASA_DATASET_PATH),
+        "pagasa_error": pagasa_meta.get("error"),
+    }
+    return combined, meta
+
+
+def evaluate_training_dataset(df):
+    if df is None or df.empty:
+        return {
+            "ready": False,
+            "reason": "No training rows available yet."
+        }
+
+    work = df.copy()
+    work["flooded"] = pd.to_numeric(work["flooded"], errors="coerce")
+    work = work[work["flooded"].isin([0, 1, 2])].copy()
+    if work.empty:
+        return {
+            "ready": False,
+            "reason": "No valid class labels in training data."
+        }
+
+    class_counts = work["flooded"].astype(int).value_counts().sort_index().to_dict()
+    if len(class_counts) < 2:
+        return {
+            "ready": False,
+            "reason": "Need at least two flood classes before accuracy can be estimated.",
+            "class_counts": class_counts
+        }
+
+    min_class_count = min(class_counts.values())
+    if min_class_count < 2:
+        return {
+            "ready": False,
+            "reason": "Need at least two rows in each available class before cross-validation can run.",
+            "class_counts": class_counts
+        }
+
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import accuracy_score, balanced_accuracy_score
+    from sklearn.model_selection import StratifiedKFold, cross_val_predict
+
+    features = ["total_rain", "water_level", "flow_rate", "rain_3h", "rise_rate", "month"]
+    X = work[features]
+    y = work["flooded"].astype(int)
+
+    n_splits = min(5, int(min_class_count))
+    if n_splits < 2:
+        return {
+            "ready": False,
+            "reason": "Not enough class diversity for cross-validation.",
+            "class_counts": class_counts
+        }
+
+    model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=8,
+        min_samples_split=6,
+        min_samples_leaf=3,
+        class_weight="balanced_subsample",
+        random_state=42
+    )
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    y_pred = cross_val_predict(model, X, y, cv=cv, method="predict")
+
+    return {
+        "ready": True,
+        "accuracy": round(float(accuracy_score(y, y_pred) * 100), 1),
+        "balanced_accuracy": round(float(balanced_accuracy_score(y, y_pred) * 100), 1),
+        "evaluation_method": f"{n_splits}-fold stratified cross-validation on training data",
+        "class_counts": {int(k): int(v) for k, v in class_counts.items()}
+    }
+
+
+def get_training_mode_status():
+    ensure_bootstrap_table()
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(f"""
+        SELECT
+            COUNT(*) AS total_rows,
+            SUM(CASE WHEN flooded = 0 THEN 1 ELSE 0 END) AS low_rows,
+            SUM(CASE WHEN flooded = 1 THEN 1 ELSE 0 END) AS moderate_rows,
+            SUM(CASE WHEN flooded = 2 THEN 1 ELSE 0 END) AS high_rows,
+            MAX(updated_at) AS last_built_at
+        FROM {BOOTSTRAP_TABLE}
+    """)
+    stats = cursor.fetchone() or {}
+    cursor.close()
+    conn.close()
+
+    training_df, training_meta = load_bootstrap_training_data()
+    model_loaded = load_model() is not None
+    evaluation = evaluate_training_dataset(training_df)
+
+    return {
+        "model_loaded": model_loaded,
+        "bootstrap_rows": int(stats.get("total_rows") or 0),
+        "class_counts": {
+            0: int(stats.get("low_rows") or 0),
+            1: int(stats.get("moderate_rows") or 0),
+            2: int(stats.get("high_rows") or 0),
+        },
+        "last_built_at": stats.get("last_built_at").isoformat() if hasattr(stats.get("last_built_at"), "isoformat") else stats.get("last_built_at"),
+        "sources": training_meta,
+        "evaluation": evaluation
+    }
 
 # =========================================
 # FETCH RECENT READINGS PER DEVICE
@@ -568,6 +1005,107 @@ def apply_sensor_row(device_id, row):
     latest_sensor_data[device_id]["rise_rate"]   = 6.0 if flooded >= 2 else (3.0 if flooded == 1 else 0.0)
 
 
+def reset_sensor_row(device_id):
+    latest_sensor_data[device_id]["water_level"] = 0.0
+    latest_sensor_data[device_id]["rainfall"] = 0.0
+    latest_sensor_data[device_id]["flow_rate"] = 0.0
+    latest_sensor_data[device_id]["rain_3h"] = 0.0
+    latest_sensor_data[device_id]["rise_rate"] = 0.0
+
+
+def apply_simulation_values(device_id, values, level):
+    latest_sensor_data[device_id]["water_level"] = float(values.get("water_level") or 0)
+    latest_sensor_data[device_id]["rainfall"] = float(values.get("rainfall") or 0)
+    latest_sensor_data[device_id]["flow_rate"] = float(values.get("flow_rate") or 0)
+    latest_sensor_data[device_id]["rain_3h"] = float(values.get("rainfall") or 0) * 2.5
+    latest_sensor_data[device_id]["rise_rate"] = (
+        2.0 if level == "moderate" else (5.0 if level == "high" else 0.0)
+    )
+
+
+def insert_sensor_reading(device_id, rainfall, water_level, flow_rate):
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO sensor_readings (device_id, total_rain, water_level, flow_rate) "
+            "VALUES (%s, %s, %s, %s)",
+            (device_id, rainfall, water_level, flow_rate)
+        )
+        conn.commit()
+        print(f"✅ DB Insert [{device_id}]: rain={rainfall}, water={water_level}, flow={flow_rate}")
+        return {"status": "saved"}
+    except mysql.connector.Error as e:
+        print(f"❌ MySQL Error: {e}")
+        return {"status": "error", "error": str(e)}
+    except Exception as e:
+        print(f"❌ Unknown DB Error: {e}")
+        return {"status": "error", "error": str(e)}
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def resolve_simulation_targets(target):
+    target = (target or "both").lower()
+    if target in SIMULATION_BRIDGE_IDS:
+        return [target]
+    return list(SIMULATION_BRIDGE_IDS)
+
+
+def restore_live_rows(device_ids):
+    restored = []
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        for device_id in device_ids:
+            cursor.execute(
+                """
+                SELECT id, device_id, timestamp, total_rain, water_level, flow_rate, flooded
+                FROM sensor_readings
+                WHERE device_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (device_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                apply_sensor_row(device_id, row)
+                restored.append({
+                    "device_id": device_id,
+                    "source": "database",
+                    "reading_id": row.get("id"),
+                    "timestamp": row["timestamp"].isoformat() if hasattr(row.get("timestamp"), "isoformat") else row.get("timestamp")
+                })
+            else:
+                reset_sensor_row(device_id)
+                restored.append({
+                    "device_id": device_id,
+                    "source": "empty"
+                })
+    except Exception as e:
+        print(f"⚠️ Could not restore live rows: {e}")
+        for device_id in device_ids:
+            reset_sensor_row(device_id)
+            restored.append({
+                "device_id": device_id,
+                "source": "empty"
+            })
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+    return restored
+
+
 def get_latest_row_before(cursor, device_id, target_ts):
     cursor.execute(
         """
@@ -603,34 +1141,23 @@ def get_latest_row_before(cursor, device_id, target_ts):
 def retrain():
     try:
         print("🔄 Auto-retrain triggered...")
-        conn = get_db_connection()
-        df   = pd.read_sql(
-            "SELECT * FROM sensor_readings ORDER BY timestamp ASC", conn
-        )
-        conn.close()
+        df, source_meta = load_bootstrap_training_data()
 
-        if len(df) < 10:
+        if len(df) < 30:
             return jsonify({"status": "skipped",
-                            "reason": f"Only {len(df)} rows — need at least 10"}), 200
+                            "reason": f"Only {len(df)} training rows — need at least 30",
+                            "sources": source_meta}), 200
 
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df = df.sort_values("timestamp").reset_index(drop=True)
-        df["rain_3h"]   = df["total_rain"].rolling(window=3, min_periods=1).sum()
-        df["rise_rate"] = df["water_level"].diff().fillna(0)
-        df["month"]     = df["timestamp"].dt.month
-        df = df.fillna(0)
-
-        if df["flooded"].nunique() < 2:
-            df["flooded"] = df.apply(
-                lambda r: 2 if (r.water_level > 150 or r.total_rain > 30)
-                         else (1 if (r.water_level > 80 or r.total_rain > 15
-                                     or r.flow_rate > 3)
-                         else 0), axis=1
-            )
-
-        if df["flooded"].nunique() < 2:
+        if df.empty or df["flooded"].nunique() < 2:
             return jsonify({"status": "skipped",
-                            "reason": "Still only 1 class after auto-label"}), 200
+                            "reason": "Need training rows from at least 2 flood classes",
+                            "sources": source_meta}), 200
+
+        class_counts = df["flooded"].astype(int).value_counts().sort_index().to_dict()
+        if min(class_counts.values()) < 2:
+            return jsonify({"status": "skipped",
+                            "reason": f"Need at least 2 rows per class for retraining. Class counts: {class_counts}",
+                            "sources": source_meta}), 200
 
         from sklearn.ensemble import RandomForestClassifier
         features = ["total_rain", "water_level", "flow_rate",
@@ -639,19 +1166,55 @@ def retrain():
         y = df["flooded"].astype(int)
 
         clf = RandomForestClassifier(
-            n_estimators=300, max_depth=10,
-            class_weight="balanced", random_state=42
+            n_estimators=200,
+            max_depth=8,
+            min_samples_split=6,
+            min_samples_leaf=3,
+            class_weight="balanced_subsample",
+            random_state=42
         )
         clf.fit(X, y)
         joblib.dump(clf, MODEL_PATH)
 
-        msg = f"✅ Retrained on {len(df)} rows — classes: {sorted(y.unique().tolist())}"
+        msg = f"✅ Retrained on {len(df)} training rows — class counts: {class_counts}"
         print(msg)
-        return jsonify({"status": "success", "message": msg, "rows": len(df)}), 200
+        return jsonify({
+            "status": "success",
+            "message": msg,
+            "rows": len(df),
+            "class_counts": class_counts,
+            "sources": source_meta
+        }), 200
 
     except Exception as e:
         print(f"❌ Retrain error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/bootstrap-dataset", methods=["POST"])
+def bootstrap_dataset():
+    try:
+        result = rebuild_bootstrap_dataset()
+        status = get_training_mode_status()
+        return jsonify({
+            "status": "success",
+            "message": result["message"],
+            "rows_written": result["rows_written"],
+            "class_counts": result["class_counts"],
+            "training_status": status
+        }), 200
+    except Exception as e:
+        print(f"❌ Bootstrap dataset error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/training-mode-status")
+def training_mode_status():
+    try:
+        return jsonify(get_training_mode_status())
+    except Exception as e:
+        print(f"❌ Training status error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # =========================================
 # ESP32 SENSOR ENDPOINT
@@ -674,25 +1237,7 @@ def receive_sensor():
     latest_sensor_data[device_id]["rainfall"]    = rainfall
     latest_sensor_data[device_id]["flow_rate"]   = flow_rate
 
-    conn   = None
-    cursor = None
-    try:
-        conn   = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO sensor_readings (device_id, total_rain, water_level, flow_rate) "
-            "VALUES (%s, %s, %s, %s)",
-            (device_id, rainfall, water_level, flow_rate)
-        )
-        conn.commit()
-        print(f"✅ DB Insert [{device_id}]: rain={rainfall}, water={water_level}, flow={flow_rate}")
-    except mysql.connector.Error as e:
-        print(f"❌ MySQL Error: {e}")
-    except Exception as e:
-        print(f"❌ Unknown DB Error: {e}")
-    finally:
-        if cursor: cursor.close()
-        if conn:   conn.close()
+    insert_sensor_reading(device_id, rainfall, water_level, flow_rate)
 
     return jsonify({"status": "received", "device": device_id})
 
@@ -805,36 +1350,104 @@ SIMULATION_PRESETS = {
     }
 }
 
-simulation_mode = {"active": False, "level": None}
+simulation_mode = {
+    "active": False,
+    "level": None,
+    "target": "both",
+    "saved": False,
+    "saved_device_ids": []
+}
 
 @app.route("/api/simulate", methods=["POST"])
 def simulate():
-    data  = request.get_json()
-    level = data.get("level", "low").lower()
+    data = request.get_json(silent=True) or {}
+    level = str(data.get("level", "low")).lower()
+    target = str(data.get("target", "both")).lower()
+    save_to_db = bool(data.get("saveToDb", False))
+    custom_device_id = str(data.get("deviceId", "") or "").strip()
 
     if level not in SIMULATION_PRESETS:
         return jsonify({"error": f"Invalid level. Choose: {list(SIMULATION_PRESETS.keys())}"}), 400
+    if target not in (*SIMULATION_BRIDGE_IDS, "both"):
+        return jsonify({"error": "Invalid target. Choose bridge1, bridge2, or both."}), 400
+
+    target_ids = resolve_simulation_targets(target)
+
+    if level == "reset":
+        restored = restore_live_rows(target_ids)
+        simulation_mode["active"] = False
+        simulation_mode["level"] = None
+        simulation_mode["target"] = target
+        simulation_mode["saved"] = False
+        simulation_mode["saved_device_ids"] = []
+
+        target_label = "both bridges" if target == "both" else ("Bridge 1" if target == "bridge1" else "Bridge 2")
+        return jsonify({
+            "status": "ok",
+            "level": level,
+            "target": target,
+            "message": f"Reset {target_label} to the latest live database readings",
+            "restored": restored,
+            "save_to_db": False,
+            "saved_rows": []
+        })
 
     preset = SIMULATION_PRESETS[level]
+    applied = []
+    saved_rows = []
 
-    for device_id, values in preset.items():
-        latest_sensor_data[device_id]["water_level"] = values["water_level"]
-        latest_sensor_data[device_id]["rainfall"]    = values["rainfall"]
-        latest_sensor_data[device_id]["flow_rate"]   = values["flow_rate"]
-        # Reset rolling features so they recalculate from new values
-        latest_sensor_data[device_id]["rain_3h"]   = values["rainfall"] * 2.5
-        latest_sensor_data[device_id]["rise_rate"] = (
-            2.0 if level == "moderate" else (5.0 if level == "high" else 0.0)
-        )
+    for device_id in target_ids:
+        values = preset.get(device_id, {})
+        apply_simulation_values(device_id, values, level)
+        applied.append({
+            "bridge_id": device_id,
+            "water_level": float(values.get("water_level") or 0),
+            "rainfall": float(values.get("rainfall") or 0),
+            "flow_rate": float(values.get("flow_rate") or 0)
+        })
 
-    simulation_mode["active"] = level != "reset"
-    simulation_mode["level"]  = level if level != "reset" else None
+        if save_to_db:
+            if custom_device_id:
+                db_device_id = custom_device_id if len(target_ids) == 1 else f"{custom_device_id}_{device_id}"
+            else:
+                db_device_id = f"sim_{level}_{device_id}"
+            save_result = insert_sensor_reading(
+                db_device_id,
+                float(values.get("rainfall") or 0),
+                float(values.get("water_level") or 0),
+                float(values.get("flow_rate") or 0)
+            )
+            saved_rows.append({
+                "device_id": db_device_id,
+                "bridge_id": device_id,
+                **save_result
+            })
 
-    print(f"🎭 Simulation mode: {level}")
+    simulation_mode["active"] = True
+    simulation_mode["level"] = level
+    simulation_mode["target"] = target
+    simulation_mode["saved"] = save_to_db
+    simulation_mode["saved_device_ids"] = [row["device_id"] for row in saved_rows if row.get("status") == "saved"]
+
+    target_label = {
+        "bridge1": "Bridge 1",
+        "bridge2": "Bridge 2",
+        "both": "both bridges"
+    }.get(target, "both bridges")
+    save_note = ""
+    if save_to_db:
+        saved_ids = simulation_mode["saved_device_ids"]
+        save_note = f" and saved to DB as {', '.join(saved_ids)}" if saved_ids else " and attempted to save to DB"
+
+    print(f"🎭 Simulation mode: level={level}, target={target}, save_to_db={save_to_db}")
     return jsonify({
-        "status":  "ok",
-        "level":   level,
-        "message": f"Simulating {level.upper()} flood risk on both bridges"
+        "status": "ok",
+        "level": level,
+        "target": target,
+        "applied": applied,
+        "save_to_db": save_to_db,
+        "saved_rows": saved_rows,
+        "message": f"Simulating {level.upper()} flood risk on {target_label}{save_note}"
     })
 
 @app.route("/api/simulation-status")
@@ -925,7 +1538,10 @@ def replay_event():
             })
 
         simulation_mode["active"] = True
-        simulation_mode["level"]  = f"replay:{event_id}"
+        simulation_mode["level"] = f"replay:{event_id}"
+        simulation_mode["target"] = "both"
+        simulation_mode["saved"] = False
+        simulation_mode["saved_device_ids"] = []
 
         ts = event["timestamp"]
         if hasattr(ts, "isoformat"):
@@ -956,88 +1572,125 @@ def replay_event():
 @app.route("/api/actual-vs-predicted")
 def actual_vs_predicted():
     try:
-        conn = get_db_connection()
-        df   = pd.read_sql(
-            """SELECT id, timestamp, device_id, total_rain,
-                      water_level, flow_rate, flooded
-               FROM sensor_readings
-               WHERE flooded IS NOT NULL
-               ORDER BY timestamp DESC
-               LIMIT 200""",
-            conn
-        )
-        conn.close()
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.metrics import accuracy_score, balanced_accuracy_score
+        from sklearn.model_selection import StratifiedKFold, cross_val_predict
+
+        df, source_meta = load_labelled_training_data(limit_db=600)
 
         if df.empty:
             return jsonify({"error": "No labelled data in database"}), 200
 
-        clf = load_model()
-        if clf is None:
-            return jsonify({"error": "Model not loaded"}), 500
-
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df = df.sort_values("timestamp").reset_index(drop=True)
-        df["rain_3h"]   = df["total_rain"].rolling(window=3, min_periods=1).sum()
-        df["rise_rate"] = df["water_level"].diff().fillna(0)
-        df["month"]     = df["timestamp"].dt.month
-        df = df.fillna(0)
+        if len(df) < 30:
+            return jsonify({"error": f"Only {len(df)} labelled rows available. Need at least 30 for a fair comparison."}), 200
 
         features = ["total_rain", "water_level", "flow_rate",
                     "rain_3h", "rise_rate", "month"]
 
         X            = df[features]
         y_actual     = df["flooded"].astype(int)
-        y_predicted  = clf.predict(X)
-        y_proba      = clf.predict_proba(X)
+        class_counts = y_actual.value_counts().sort_index().to_dict()
 
         label_map = {0: "Low", 1: "Moderate", 2: "High"}
 
-        # Compute metrics
-        correct   = int((y_actual.values == y_predicted).sum())
-        total     = len(y_actual)
-        accuracy  = round(correct / total * 100, 1)
+        def build_response(y_predicted, y_proba, accuracy_value, balanced_accuracy_value,
+                           method_text):
+            correct = int((y_actual.values == y_predicted).sum())
+            total = len(y_actual)
 
-        # Confusion counts
-        conf = {
-            "low_correct":      int(((y_actual == 0) & (y_predicted == 0)).sum()),
-            "mod_correct":      int(((y_actual == 1) & (y_predicted == 1)).sum()),
-            "high_correct":     int(((y_actual == 2) & (y_predicted == 2)).sum()),
-            "low_as_moderate":  int(((y_actual == 0) & (y_predicted == 1)).sum()),
-            "low_as_high":      int(((y_actual == 0) & (y_predicted == 2)).sum()),
-            "mod_as_low":       int(((y_actual == 1) & (y_predicted == 0)).sum()),
-            "mod_as_high":      int(((y_actual == 1) & (y_predicted == 2)).sum()),
-            "high_as_low":      int(((y_actual == 2) & (y_predicted == 0)).sum()),
-            "high_as_moderate": int(((y_actual == 2) & (y_predicted == 1)).sum()),
-        }
+            conf = {
+                "low_correct":      int(((y_actual == 0) & (y_predicted == 0)).sum()),
+                "mod_correct":      int(((y_actual == 1) & (y_predicted == 1)).sum()),
+                "high_correct":     int(((y_actual == 2) & (y_predicted == 2)).sum()),
+                "low_as_moderate":  int(((y_actual == 0) & (y_predicted == 1)).sum()),
+                "low_as_high":      int(((y_actual == 0) & (y_predicted == 2)).sum()),
+                "mod_as_low":       int(((y_actual == 1) & (y_predicted == 0)).sum()),
+                "mod_as_high":      int(((y_actual == 1) & (y_predicted == 2)).sum()),
+                "high_as_low":      int(((y_actual == 2) & (y_predicted == 0)).sum()),
+                "high_as_moderate": int(((y_actual == 2) & (y_predicted == 1)).sum()),
+            }
 
-        # Sample rows for table display (last 30)
-        rows = []
-        df_tail = df.tail(30).copy()
-        preds_tail = y_predicted[-30:]
-        probas_tail = y_proba[-30:]
+            prediction_counts = pd.Series(y_predicted).value_counts().sort_index().to_dict()
 
-        for i, (_, row) in enumerate(df_tail.iterrows()):
-            actual    = int(row["flooded"])
-            predicted = int(preds_tail[i])
-            conf_pct  = round(float(max(probas_tail[i])) * 100, 1)
-            rows.append({
-                "timestamp":  row["timestamp"].isoformat(),
-                "device_id":  row.get("device_id", "bridge1"),
-                "actual":     label_map.get(actual, "Low"),
-                "predicted":  label_map.get(predicted, "Low"),
-                "confidence": conf_pct,
-                "match":      actual == predicted,
-                "rain":       round(float(row["total_rain"]), 2),
-                "water_level":round(float(row["water_level"]), 2),
+            rows = []
+            df_tail = df.tail(30).copy()
+            preds_tail = y_predicted[-30:]
+            probas_tail = y_proba[-30:]
+
+            for i, (_, row) in enumerate(df_tail.iterrows()):
+                actual = int(row["flooded"])
+                predicted = int(preds_tail[i])
+                conf_pct = round(float(max(probas_tail[i])) * 100, 1)
+                rows.append({
+                    "timestamp": row["timestamp"].isoformat(),
+                    "device_id": row.get("device_id", "bridge1"),
+                    "actual": label_map.get(actual, "Low"),
+                    "predicted": label_map.get(predicted, "Low"),
+                    "confidence": conf_pct,
+                    "match": actual == predicted,
+                    "rain": round(float(row["total_rain"]), 2),
+                    "water_level": round(float(row["water_level"]), 2),
+                })
+
+            return jsonify({
+                "accuracy": round(float(accuracy_value), 1),
+                "balanced_accuracy": None if balanced_accuracy_value is None else round(float(balanced_accuracy_value), 1),
+                "correct": correct,
+                "total": total,
+                "confusion": conf,
+                "rows": rows,
+                "class_counts": class_counts,
+                "prediction_counts": prediction_counts,
+                "evaluation_method": method_text,
+                "sources": source_meta,
             })
 
-        return jsonify({
-            "accuracy":   accuracy,
-            "correct":    correct,
-            "total":      total,
-            "confusion":  conf,
-            "rows":       rows,
-        })
+        fallback_model = RandomForestClassifier(
+            n_estimators=200,
+            max_depth=8,
+            min_samples_split=6,
+            min_samples_leaf=3,
+            class_weight="balanced_subsample",
+            random_state=42
+        )
+
+        if len(class_counts) < 2:
+            return jsonify({
+                "setup_required": True,
+                "message": "Actual vs Predicted will appear after the dataset includes at least two labelled flood classes.",
+                "class_counts": class_counts,
+                "sources": source_meta,
+            }), 200
+
+        min_class_count = min(class_counts.values())
+        if min_class_count < 2:
+            return jsonify({
+                "setup_required": True,
+                "message": "Actual vs Predicted needs at least two labelled rows in each available flood class before cross-validation can run.",
+                "class_counts": class_counts,
+                "sources": source_meta,
+            }), 200
+
+        n_splits = min(5, int(min_class_count))
+        if n_splits < 2:
+            return jsonify({
+                "setup_required": True,
+                "message": "Actual vs Predicted needs more class diversity before cross-validation can run.",
+                "class_counts": class_counts,
+                "sources": source_meta,
+            }), 200
+
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        y_predicted = cross_val_predict(fallback_model, X, y_actual, cv=cv, method="predict")
+        y_proba = cross_val_predict(fallback_model, X, y_actual, cv=cv, method="predict_proba")
+
+        return build_response(
+            y_predicted,
+            y_proba,
+            accuracy_score(y_actual, y_predicted) * 100,
+            balanced_accuracy_score(y_actual, y_predicted) * 100,
+            f"{n_splits}-fold stratified cross-validation on labelled rows"
+        )
 
     except Exception as e:
         print(f"❌ Actual vs Predicted error: {e}")
