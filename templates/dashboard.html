@@ -2,6 +2,7 @@
 <html>
 <head>
   <title>FloodGuide – Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
@@ -9,7 +10,7 @@
     body{font-family:'Inter',sans-serif;background:#0a0f1e;color:#e2e8f0;min-height:100vh}
 
     /* ── TOPBAR ── */
-    .topbar{height:56px;background:rgba(15,23,42,.97);border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;padding:0 2rem;position:sticky;top:0;z-index:100}
+    .topbar{min-height:56px;background:rgba(15,23,42,.97);border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;padding:.6rem 2rem;position:sticky;top:0;z-index:100;gap:.8rem;flex-wrap:wrap}
     .logo{font-size:.95rem;font-weight:700;color:#38bdf8;letter-spacing:.06em}
     .logo span{color:#334155;font-weight:400}
     .topbar-right{display:flex;align-items:center;gap:.5rem}
@@ -17,7 +18,7 @@
     .live-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;animation:blink 2s infinite}
     @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
     .tnav{display:flex;align-items:center;gap:.3rem}
-    .tbtn{padding:.3rem .7rem;border-radius:6px;font-size:.7rem;font-weight:500;text-decoration:none;border:1px solid #1e293b;background:transparent;color:#64748b;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap}
+    .tbtn{padding:.55rem .95rem;border-radius:9px;font-size:.82rem;font-weight:600;text-decoration:none;border:1px solid #1e293b;background:transparent;color:#64748b;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap;min-height:44px;display:inline-flex;align-items:center;justify-content:center}
     .tbtn:hover{background:#1e293b;color:#e2e8f0;border-color:#334155}
     .tbtn.active{background:#38bdf820;border-color:#38bdf860;color:#38bdf8}
     .tbtn.thresh{background:#f59e0b18;border-color:#f59e0b60;color:#f59e0b}
@@ -130,6 +131,45 @@
     .train-ok{color:#22c55e}
     .train-warn{color:#f59e0b}
     .train-muted{color:#64748b}
+    .section-head{display:flex;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap;margin-bottom:.85rem}
+    .section-copy{font-size:.7rem;color:#64748b;line-height:1.55;margin-bottom:.85rem}
+    .comparison-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;margin-bottom:.85rem}
+    .comparison-stat{background:#0a0f1e;border-radius:8px;padding:.8rem;text-align:center}
+    .comparison-value{font-size:1.5rem;font-weight:700;line-height:1;color:#e2e8f0}
+    .comparison-label{font-size:.58rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.25rem}
+    .comparison-note{background:#0a0f1e;border-radius:7px;padding:.85rem;color:#94a3b8;font-size:.72rem;line-height:1.6;margin-bottom:.85rem}
+    .comparison-note.warn{border:1px solid #f59e0b40}
+    .comparison-hero{background:#0a0f1e;border-radius:8px;padding:1rem 1.2rem;text-align:center;margin-bottom:.85rem}
+    .comparison-hero .big{font-size:2.4rem;font-weight:700;line-height:1;color:#38bdf8}
+    .comparison-hero .sub{font-size:.62rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.2rem}
+    .comparison-hero .meta{font-size:.68rem;color:#94a3b8;line-height:1.55;margin-top:.35rem}
+    .comparison-block-title{font-size:.78rem;font-weight:600;color:#e2e8f0;margin:.25rem 0 .5rem}
+    .match-yes{color:#22c55e;font-weight:700}
+    .match-no{color:#ef4444;font-weight:700}
+    .btn-row{display:flex;gap:.6rem;flex-wrap:wrap}
+    @media(max-width:900px){.comparison-grid{grid-template-columns:1fr 1fr}}
+    @media(max-width:768px){
+      .page{padding:1rem}
+      .topbar{padding:.7rem 1rem}
+      .topbar-right{width:100%;justify-content:space-between;flex-wrap:wrap}
+      .tnav{width:100%;gap:.5rem;flex-wrap:wrap}
+      .tbtn{flex:1 1 140px;font-size:.9rem;padding:.75rem 1rem;min-height:48px}
+      .table-card,.chart-card,.bridge-card,.stat-card{padding:1rem}
+      .risk-label{font-size:1.55rem}
+      .pill{font-size:.72rem;padding:.4rem .7rem}
+      .sensor-val{font-size:1.08rem}
+      .train-actions .tbtn,.btn-row .tbtn{flex:1 1 180px}
+      .data-table{font-size:.78rem}
+      .data-table th{font-size:.62rem}
+      .data-table td{padding:.6rem .5rem}
+    }
+    @media(max-width:520px){
+      .stats-grid,.cg,.comparison-grid{grid-template-columns:1fr}
+      .sensor-grid{grid-template-columns:1fr}
+      .page-title{font-size:.72rem}
+      .modal{width:94vw;padding:1rem}
+      .section-head{align-items:flex-start}
+    }
   </style>
 </head>
 <body>
@@ -219,8 +259,8 @@
         <div class="risk-trend" id="trend-bridge1">Stable</div>
       </div>
       <div class="pill-row">
+        <div class="pill">1H <b id="pred1-bridge1">Low</b></div>
         <div class="pill">3H <b id="pred3-bridge1">Low</b></div>
-        <div class="pill">6H <b id="pred6-bridge1">Low</b></div>
         <div class="pill">Confidence <b id="conf-bridge1">0%</b></div>
       </div>
       <div class="sensor-grid">
@@ -241,8 +281,8 @@
           <div class="sensor-val"><span id="rise-bridge1">0.00</span><span class="sensor-unit">cm</span></div>
         </div>
         <div class="sensor-item">
-          <div class="sensor-lbl">Forecast 3H</div>
-          <div class="sensor-val"><span id="forecast-bridge1">0.00</span><span class="sensor-unit">mm</span></div>
+          <div class="sensor-lbl">Forecast 1H</div>
+          <div class="sensor-val"><span id="forecast1-bridge1">0.00</span><span class="sensor-unit">mm</span></div>
         </div>
         <div class="sensor-item">
           <div class="sensor-lbl">Subside Time</div>
@@ -260,8 +300,8 @@
         <div class="risk-trend" id="trend-bridge2">Stable</div>
       </div>
       <div class="pill-row">
+        <div class="pill">1H <b id="pred1-bridge2">Low</b></div>
         <div class="pill">3H <b id="pred3-bridge2">Low</b></div>
-        <div class="pill">6H <b id="pred6-bridge2">Low</b></div>
         <div class="pill">Confidence <b id="conf-bridge2">0%</b></div>
       </div>
       <div class="sensor-grid">
@@ -282,8 +322,8 @@
           <div class="sensor-val"><span id="rise-bridge2">0.00</span><span class="sensor-unit">cm</span></div>
         </div>
         <div class="sensor-item">
-          <div class="sensor-lbl">Forecast 3H</div>
-          <div class="sensor-val"><span id="forecast-bridge2">0.00</span><span class="sensor-unit">mm</span></div>
+          <div class="sensor-lbl">Forecast 1H</div>
+          <div class="sensor-val"><span id="forecast1-bridge2">0.00</span><span class="sensor-unit">mm</span></div>
         </div>
         <div class="sensor-item">
           <div class="sensor-lbl">Subside Time</div>
@@ -367,7 +407,7 @@
 
   <div class="table-card">
     <div class="table-title">Training Mode</div>
-    <div style="font-size:.7rem;color:#64748b;margin-bottom:.85rem">Build a separate bootstrap dataset from historical sensor readings, then retrain the Random Forest from that dataset. Optional PAGASA CSV rows are added automatically if a file is available later.</div>
+    <div style="font-size:.7rem;color:#64748b;margin-bottom:.85rem">Build a separate bootstrap dataset from historical sensor readings, then retrain the Random Forest from that dataset. This section measures how well the model matches the bootstrap training labels, not how later live readings turned out. Optional PAGASA CSV rows are added automatically if a file is available later.</div>
     <div class="train-actions">
       <button class="tbtn rfbtn" onclick="buildBootstrapDataset()">Build Bootstrap Dataset</button>
       <button class="tbtn rfbtn" onclick="retrainModel()">Retrain Model</button>
@@ -375,6 +415,21 @@
     </div>
     <div id="trainingModeContent">
       <div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>
+    </div>
+  </div>
+
+  <div class="table-card">
+    <div class="section-head">
+      <div>
+        <div class="table-title" style="margin-bottom:.2rem">Actual vs Predicted</div>
+        <div class="section-copy" style="margin-bottom:0">Compare each saved 1-hour and 3-hour prediction against the later bridge reading that arrived after that forecast window.</div>
+      </div>
+      <div class="btn-row">
+        <button class="tbtn rfbtn" onclick="loadActualVsPredicted()">Refresh Comparison</button>
+      </div>
+    </div>
+    <div id="actualVsPredictedContent">
+      <div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>
     </div>
   </div>
 </div>
@@ -486,14 +541,14 @@ function setCard(bridgeId,rows,status){
   riskEl.textContent=riskLabel+' Risk';
   trendEl.textContent=status&&status.trend_text?status.trend_text:'Stable';
   trendEl.style.color=status&&status.trend_color?status.trend_color:'#94a3b8';
+  document.getElementById('pred1-'+bridgeId).textContent=status&&status.pred_risk_1h?status.pred_risk_1h:'-';
   document.getElementById('pred3-'+bridgeId).textContent=status&&status.pred_risk_3h?status.pred_risk_3h:'-';
-  document.getElementById('pred6-'+bridgeId).textContent=status&&status.pred_risk_6h?status.pred_risk_6h:'-';
   document.getElementById('conf-'+bridgeId).textContent=status?parseFloat(status.current_conf||status.confidence||0).toFixed(1)+'%':'-';
   document.getElementById('rain-'+bridgeId).textContent=rain.toFixed(2);
   document.getElementById('wl-'+bridgeId).textContent=wl.toFixed(2);
   document.getElementById('flow-'+bridgeId).textContent=flow.toFixed(2);
   document.getElementById('rise-'+bridgeId).textContent=rise.toFixed(2);
-  document.getElementById('forecast-'+bridgeId).textContent=status?parseFloat(status.forecast_3h||0).toFixed(2):'0.00';
+  document.getElementById('forecast1-'+bridgeId).textContent=status?parseFloat(status.forecast_1h||0).toFixed(2):'0.00';
   document.getElementById('subside-'+bridgeId).textContent=status&&status.subside_display?status.subside_display:'-';
   const liveTs=status&&status.updated_at?fmtTs(status.updated_at):'—';
   const dbTs=latest&&latest.timestamp?fmtTs(latest.timestamp):'—';
@@ -507,6 +562,12 @@ function fmtTs(iso){
 
 function trainingClassLine(classCounts){
   return 'Low '+(classCounts[0]||0)+' • Moderate '+(classCounts[1]||0)+' • High '+(classCounts[2]||0);
+}
+
+function deviceDisplayName(deviceId){
+  if(deviceId === 'bridge1') return 'Bridge 1';
+  if(deviceId === 'bridge2') return 'Bridge 2';
+  return deviceId || 'Unknown';
 }
 
 function renderTrainingMode(data,message){
@@ -533,7 +594,7 @@ function renderTrainingMode(data,message){
     note+
     '<div class="accuracy-box">'+
       '<div class="acc-pct" style="color:'+(evalReady?'#22c55e':statusTone)+'">'+(evalReady?evalAccuracy:bootstrapRows)+'</div>'+
-      '<div class="acc-lbl">'+(evalReady?'System Accuracy Estimate':'Bootstrap Training Rows')+'</div>'+
+      '<div class="acc-lbl">'+(evalReady?'Bootstrap Model Accuracy':'Bootstrap Training Rows')+'</div>'+
       '<div class="acc-sub">'+statusText+'</div>'+
       '<div class="acc-sub" style="margin-top:.25rem">Balanced accuracy: '+evalBalanced+'</div>'+
       '<div class="acc-sub" style="margin-top:.25rem">Class mix: '+trainingClassLine(classCounts)+'</div>'+
@@ -607,6 +668,97 @@ async function retrainModel(){
   }
 }
 
+function renderActualVsPredicted(data){
+  const content=document.getElementById('actualVsPredictedContent');
+  if(!content) return;
+
+  const rows=Array.isArray(data.rows)?data.rows:[];
+  const horizon1=data.horizons&&data.horizons['1h']?data.horizons['1h']:{};
+  const horizon3=data.horizons&&data.horizons['3h']?data.horizons['3h']:{};
+  const classCounts=data.class_counts||{};
+  const predictionCounts=data.prediction_counts||{};
+  const correctByClass=data.correct_by_class||{};
+  const wrongByClass=data.wrong_by_class||{};
+  const accuracy=data.accuracy!=null?data.accuracy:'—';
+  const balanced=data.balanced_accuracy!=null?data.balanced_accuracy:'n/a';
+  const correct=Number(data.correct||0);
+  const total=Number(data.total||0);
+  const noteText=data.message||data.error||'Comparison ready.';
+  const noteTone=(data.setup_required||data.error)?' warn':'';
+  const method=data.evaluation_method||'No evaluation method available.';
+
+  let html=
+    '<div class="comparison-hero">'+
+      '<div class="big">'+accuracy+(accuracy!=='—'?'%':'')+'</div>'+
+      '<div class="sub">Prediction Accuracy vs Later Actual Readings</div>'+
+      '<div class="meta">'+correct+' matching scored rows out of '+total+'</div>'+
+      '<div class="meta">Evaluation: '+method+'</div>'+
+      '<div class="meta">Balanced accuracy: '+balanced+(balanced!=='n/a'?'%':'')+'</div>'+
+      '<div class="meta">Actual class counts: Low '+(classCounts[0]||0)+', Moderate '+(classCounts[1]||0)+', High '+(classCounts[2]||0)+'</div>'+
+      '<div class="meta">Predicted mix: Low '+(predictionCounts[0]||0)+', Moderate '+(predictionCounts[1]||0)+', High '+(predictionCounts[2]||0)+'</div>'+
+      '<div class="meta">1H: '+(horizon1.accuracy!=null?horizon1.accuracy+'%':'—')+' ('+(horizon1.correct||0)+'/'+(horizon1.total||0)+') • 3H: '+(horizon3.accuracy!=null?horizon3.accuracy+'%':'—')+' ('+(horizon3.correct||0)+'/'+(horizon3.total||0)+')</div>'+
+    '</div>'+
+    '<div class="comparison-note'+noteTone+'">'+
+      noteText+'<br>'+
+      'Pending comparisons: 1 hour '+(horizon1.pending||0)+' • 3 hours '+(horizon3.pending||0)+
+    '</div>';
+
+  if(rows.length===0){
+    html += '<div style="text-align:center;color:#334155;padding:1rem">No comparison rows available yet.</div>';
+    content.innerHTML=html;
+    return;
+  }
+
+  html +=
+    '<div class="comparison-block-title">Correct Predictions</div>'+
+    '<div class="comparison-grid">'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#22c55e">'+(correctByClass.low_correct||0)+'</div><div class="comparison-label">Low ✓</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#f59e0b">'+(correctByClass.mod_correct||0)+'</div><div class="comparison-label">Moderate ✓</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#ef4444">'+(correctByClass.high_correct||0)+'</div><div class="comparison-label">High ✓</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#38bdf8">'+correct+'</div><div class="comparison-label">Total ✓</div></div>'+
+    '</div>'+
+    '<div class="comparison-block-title">Misclassifications</div>'+
+    '<div class="comparison-grid">'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.low_wrong||0)+'</div><div class="comparison-label">Low wrong</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.mod_wrong||0)+'</div><div class="comparison-label">Moderate wrong</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.high_wrong||0)+'</div><div class="comparison-label">High wrong</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+Math.max(total-correct,0)+'</div><div class="comparison-label">Total wrong</div></div>'+
+    '</div>'+
+    '<div class="comparison-block-title">Last 30 Scored Rows</div>'+
+    '<div style="overflow-x:auto">'+
+      '<table class="data-table">'+
+        '<thead><tr><th>Time</th><th>Device</th><th>Horizon</th><th>Actual</th><th>Predicted</th><th>Conf</th><th>✓</th></tr></thead>'+
+        '<tbody>'+
+          rows.map(row=>
+            '<tr>'+
+              '<td>'+fmtTs(row.prediction_time)+'</td>'+
+              '<td style="color:#64748b">'+deviceDisplayName(row.device_id)+'</td>'+
+              '<td>'+(row.horizon||'').toUpperCase()+'</td>'+
+              '<td style="color:'+(row.actual==='Low'?'#22c55e':(row.actual==='Moderate'?'#f59e0b':'#ef4444'))+'">'+row.actual+'</td>'+
+              '<td style="color:'+(row.predicted==='Low'?'#22c55e':(row.predicted==='Moderate'?'#f59e0b':'#ef4444'))+'">'+row.predicted+'</td>'+
+              '<td>'+parseFloat(row.confidence||0).toFixed(1)+'%</td>'+
+              '<td>'+(row.match?'<span class="match-yes">V</span>':'<span class="match-no">X</span>')+'</td>'+
+            '</tr>'
+          ).join('')+
+        '</tbody>'+
+      '</table>'+
+    '</div>';
+
+  content.innerHTML=html;
+}
+
+async function loadActualVsPredicted(){
+  const content=document.getElementById('actualVsPredictedContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>';
+  try{
+    const res=await fetch('/api/actual-vs-predicted');
+    const data=await res.json();
+    renderActualVsPredicted(data);
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
 // ── LOAD DASHBOARD DATA ───────────────────────────────────────────────────
 async function loadDashboard(){
   try{
@@ -663,8 +815,8 @@ async function loadDashboard(){
 
 loadDashboard();
 loadTrainingMode();
+loadActualVsPredicted();
 setInterval(loadDashboard,30000);
-setInterval(loadTrainingMode,30000);
 </script>
 </body>
 </html>
