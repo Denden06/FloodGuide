@@ -560,6 +560,27 @@ function fmtTs(iso){
   return new Date(iso).toLocaleString('en-PH',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 }
 
+async function fetchJsonSafe(url, options){
+  const res = await fetch(url, options);
+  const text = await res.text();
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+
+  if(contentType.includes('application/json')){
+    try{
+      return JSON.parse(text);
+    }catch(e){
+      throw new Error('Server returned invalid JSON for ' + url + '.');
+    }
+  }
+
+  const shortText = (text || '').replace(/\s+/g,' ').trim().slice(0,160);
+  if(shortText.startsWith('<!DOCTYPE') || shortText.startsWith('<html') || shortText.startsWith('<')){
+    throw new Error('Server returned HTML instead of JSON. The Render backend may be outdated or crashing, so it needs a redeploy.');
+  }
+
+  throw new Error(shortText || ('Server returned ' + res.status + ' ' + res.statusText + '.'));
+}
+
 function trainingClassLine(classCounts){
   return 'Low '+(classCounts[0]||0)+' • Moderate '+(classCounts[1]||0)+' • High '+(classCounts[2]||0);
 }
@@ -624,8 +645,7 @@ async function loadTrainingMode(){
   const content=document.getElementById('trainingModeContent');
   content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>';
   try{
-    const res=await fetch('/api/training-mode-status');
-    const data=await res.json();
+    const data=await fetchJsonSafe('/api/training-mode-status');
     renderTrainingMode(data);
   }catch(e){
     content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
@@ -636,8 +656,7 @@ async function buildBootstrapDataset(){
   const content=document.getElementById('trainingModeContent');
   content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Building bootstrap dataset...</div>';
   try{
-    const res=await fetch('/api/bootstrap-dataset',{method:'POST'});
-    const data=await res.json();
+    const data=await fetchJsonSafe('/api/bootstrap-dataset',{method:'POST'});
     if(data.status!=='success'){
       content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">'+(data.message||'Bootstrap build failed.')+'</div>';
       return;
@@ -652,17 +671,16 @@ async function retrainModel(){
   const content=document.getElementById('trainingModeContent');
   content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Retraining model...</div>';
   try{
-    const res=await fetch('/retrain',{method:'POST'});
-    const data=await res.json();
+    const data=await fetchJsonSafe('/retrain',{method:'POST'});
     if(data.status==='success'){
       await loadDashboard();
       await loadTrainingMode();
       renderTrainingMode({
-        ...(await (await fetch('/api/training-mode-status')).json())
+        ...(await fetchJsonSafe('/api/training-mode-status'))
       },data.message);
       return;
     }
-    renderTrainingMode(await (await fetch('/api/training-mode-status')).json(),data.message||data.reason||'Retraining skipped.');
+    renderTrainingMode(await fetchJsonSafe('/api/training-mode-status'),data.message||data.reason||'Retraining skipped.');
   }catch(e){
     content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
   }
@@ -751,8 +769,7 @@ async function loadActualVsPredicted(){
   const content=document.getElementById('actualVsPredictedContent');
   content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>';
   try{
-    const res=await fetch('/api/actual-vs-predicted');
-    const data=await res.json();
+    const data=await fetchJsonSafe('/api/actual-vs-predicted');
     renderActualVsPredicted(data);
   }catch(e){
     content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
