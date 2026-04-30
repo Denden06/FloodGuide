@@ -31,6 +31,7 @@ API_KEY    = "e2a8ee9c6e8ec237763497022a1309bb"
 MODEL_PATH = "model_class.pkl"
 PAGASA_DATASET_PATH = os.getenv("PAGASA_DATASET_PATH", "pagasa_labeled.csv")
 BOOTSTRAP_TABLE = "bootstrap_training_data"
+PREDICTION_AUDIT_TABLE = "prediction_audit"
 GOOGLE_MAPS_API_KEY = os.getenv(
     "GOOGLE_MAPS_API_KEY",
     "AIzaSyBfyF6DofStbAoUKcG83eEBE72OpaLqTus"
@@ -55,6 +56,7 @@ latest_sensor_data = {
 }
 
 SIMULATION_BRIDGE_IDS = ("bridge1", "bridge2")
+prediction_audit_table_ready = False
 
 MONITORED_SITES = [
     {"id": "bridge1", "name": "Mandaue-Mactan Bridge 1", "lat": 10.326490, "lng": 123.952142},
@@ -148,6 +150,16 @@ def normalize_flood_label(value):
         return numeric if numeric in (0, 1, 2) else None
     except Exception:
         return None
+
+
+def flood_label_text(value):
+    mapping = {0: "Low", 1: "Moderate", 2: "High"}
+    return mapping.get(int(value), "Low")
+
+
+def prediction_bucket_for(ts, minutes=10):
+    bucket_minute = (ts.minute // minutes) * minutes
+    return ts.replace(minute=bucket_minute, second=0, microsecond=0)
 
 
 def load_pagasa_dataset():
@@ -306,6 +318,135 @@ def ensure_bootstrap_table():
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def ensure_prediction_audit_table():
+    global prediction_audit_table_ready
+    if prediction_audit_table_ready:
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS {PREDICTION_AUDIT_TABLE} (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            device_id VARCHAR(32) NOT NULL,
+            prediction_time DATETIME NOT NULL,
+            prediction_bucket DATETIME NOT NULL,
+            current_risk VARCHAR(16) NOT NULL,
+            predicted_risk_1h VARCHAR(16) NOT NULL,
+            predicted_conf_1h FLOAT NOT NULL DEFAULT 0,
+            predicted_risk_3h VARCHAR(16) NOT NULL,
+            predicted_conf_3h FLOAT NOT NULL DEFAULT 0,
+            baseline_rainfall FLOAT NOT NULL DEFAULT 0,
+            baseline_water_level FLOAT NOT NULL DEFAULT 0,
+            baseline_flow_rate FLOAT NOT NULL DEFAULT 0,
+            ml_active TINYINT(1) NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_prediction_bucket (device_id, prediction_bucket)
+        )
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
+    prediction_audit_table_ready = True
+
+
+def log_prediction_audit(device_id, sensor, preds, prediction_time, ml_active):
+    try:
+        ensure_prediction_audit_table()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        bucket = prediction_bucket_for(prediction_time, 10)
+        cursor.execute(
+            f"""
+            INSERT INTO {PREDICTION_AUDIT_TABLE} (
+                device_id, prediction_time, prediction_bucket,
+                current_risk, predicted_risk_1h, predicted_conf_1h,
+                predicted_risk_3h, predicted_conf_3h,
+                baseline_rainfall, baseline_water_level, baseline_flow_rate, ml_active
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                prediction_time = VALUES(prediction_time),
+                current_risk = VALUES(current_risk),
+                predicted_risk_1h = VALUES(predicted_risk_1h),
+                predicted_conf_1h = VALUES(predicted_conf_1h),
+                predicted_risk_3h = VALUES(predicted_risk_3h),
+                predicted_conf_3h = VALUES(predicted_conf_3h),
+                baseline_rainfall = VALUES(baseline_rainfall),
+                baseline_water_level = VALUES(baseline_water_level),
+                baseline_flow_rate = VALUES(baseline_flow_rate),
+                ml_active = VALUES(ml_active)
+            """,
+            (
+                device_id,
+                prediction_time,
+                bucket,
+                preds["current_risk"],
+                preds["pred_risk_1h"],
+                float(preds["pred_conf_1h"]),
+                preds["pred_risk_3h"],
+                float(preds["pred_conf_3h"]),
+                float(sensor.get("rainfall") or 0),
+                float(sensor.get("water_level") or 0),
+                float(sensor.get("flow_rate") or 0),
+                1 if ml_active else 0,
+            )
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Prediction audit log failed: {e}")
+
+
+def get_actual_row_after(cursor, device_id, target_ts):
+    cursor.execute(
+        """
+        SELECT id, device_id, timestamp, total_rain, water_level, flow_rate, flooded
+        FROM sensor_readings
+        WHERE device_id = %s AND timestamp >= %s
+        ORDER BY timestamp ASC
+        LIMIT 1
+        """,
+        (device_id, target_ts)
+    )
+    return cursor.fetchone()
+
+
+def derive_actual_label(cursor, device_id, actual_row):
+    stored = normalize_flood_label(actual_row.get("flooded"))
+    if stored is not None:
+        return stored
+
+    cursor.execute(
+        """
+        SELECT id, timestamp, device_id, total_rain, water_level, flow_rate, flooded
+        FROM sensor_readings
+        WHERE device_id = %s AND timestamp <= %s
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 18
+        """,
+        (device_id, actual_row["timestamp"])
+    )
+    rows = cursor.fetchall()
+    if rows:
+        rows = list(reversed(rows))
+        frame = pd.DataFrame(rows)
+        frame = prepare_feature_frame(frame)
+        if not frame.empty:
+            return int(bootstrap_label_from_features(frame.iloc[-1].to_dict()))
+
+    fallback_risk, _, _ = rule_based_predict({
+        "rainfall": float(actual_row.get("total_rain") or 0),
+        "water_level": float(actual_row.get("water_level") or 0),
+        "flow_rate": float(actual_row.get("flow_rate") or 0),
+        "rain_3h": float(actual_row.get("total_rain") or 0),
+        "rise_rate": 0.0
+    })
+    return normalize_flood_label(fallback_risk)
 
 
 def bootstrap_label_from_features(row):
@@ -555,15 +696,15 @@ def using_demo_state():
 
 # =========================================
 # GET WEATHER FORECAST FROM OPENWEATHERMAP
-# Returns: temp, humidity, next 3h rain,
-#          next 6h rain (2 forecast periods)
+# Returns: temp, humidity, next 1h rain estimate,
+#          next 3h rain estimate
 # =========================================
 def get_weather_data(lat, lng):
     result = {
         "temp":           28.0,
         "humidity":       70,
-        "forecast_3h":    0.0,   # predicted rain in next 3 hours
-        "forecast_6h":    0.0,   # predicted rain in next 6 hours
+        "forecast_1h":    0.0,
+        "forecast_3h":    0.0,
     }
     try:
         # Current weather
@@ -578,20 +719,18 @@ def get_weather_data(lat, lng):
         pass
 
     try:
-        # Forecast — next 6 hours (cnt=2 gives two 3-hour periods)
+        # Forecast data comes in 3-hour blocks, so 1-hour rain is estimated
+        # as one third of the next 3-hour accumulation.
         url_fc = (
             f"https://api.openweathermap.org/data/2.5/forecast"
-            f"?lat={lat}&lon={lng}&appid={API_KEY}&units=metric&cnt=2"
+            f"?lat={lat}&lon={lng}&appid={API_KEY}&units=metric&cnt=1"
         )
         fc = requests.get(url_fc, timeout=5).json()
         periods = fc.get("list", [])
         if len(periods) >= 1:
-            result["forecast_3h"] = periods[0].get("rain", {}).get("3h", 0.0)
-        if len(periods) >= 2:
-            result["forecast_6h"] = (
-                periods[0].get("rain", {}).get("3h", 0.0) +
-                periods[1].get("rain", {}).get("3h", 0.0)
-            )
+            next_3h_rain = float(periods[0].get("rain", {}).get("3h", 0.0) or 0.0)
+            result["forecast_3h"] = next_3h_rain
+            result["forecast_1h"] = round(next_3h_rain / 3.0, 2)
     except Exception:
         pass
 
@@ -659,7 +798,7 @@ def run_prediction(features, clf):
 # Computes CURRENT risk + PREDICTED risk
 # (current + forecast rainfall scenario)
 # =========================================
-def get_predictions(device_id, forecast_3h, forecast_6h, clf):
+def get_predictions(device_id, forecast_1h, forecast_3h, clf):
     sensor  = latest_sensor_data[device_id].copy()
     history = [] if using_demo_state() else get_recent_readings(device_id, 6)
 
@@ -695,51 +834,56 @@ def get_predictions(device_id, forecast_3h, forecast_6h, clf):
     prediction_model = None if using_demo_state() else clf
     current_risk, current_color, current_conf = run_prediction(current_features, prediction_model)
 
-    # ── PREDICTED RISK (3 hours from now) ──
-    # Simulates what the sensor will look like in 3h
+    # ── PREDICTED RISK (1 hour from now) ──
+    # Simulates what the sensor will look like in 1h
     # by adding forecast rainfall to current accumulation.
     # This is the actual prediction capability.
-    predicted_rain_3h = rain_3h + forecast_3h   # current accumulation + incoming rain
-    predicted_wl      = sensor["water_level"] + max(0, forecast_3h * 0.4)  # estimated rise
+    predicted_rain_1h = rain_3h + forecast_1h
+    predicted_wl_1h   = sensor["water_level"] + max(0, forecast_1h * 0.4)
 
-    predicted_features = {
+    predicted_features_1h = {
+        "total_rain":  sensor["rainfall"] + forecast_1h,
+        "water_level": predicted_wl_1h,
+        "flow_rate":   sensor["flow_rate"],
+        "rain_3h":     predicted_rain_1h,
+        "rise_rate":   rise_rate + (forecast_1h * 0.1),
+        "month":       month
+    }
+    pred_risk_1h, pred_color_1h, pred_conf_1h = run_prediction(predicted_features_1h, prediction_model)
+
+    # ── PREDICTED RISK (3 hours from now) ──
+    predicted_rain_3h = rain_3h + forecast_3h
+    predicted_wl_3h   = sensor["water_level"] + max(0, forecast_3h * 0.4)
+
+    predicted_features_3h = {
         "total_rain":  sensor["rainfall"] + forecast_3h,
-        "water_level": predicted_wl,
+        "water_level": predicted_wl_3h,
         "flow_rate":   sensor["flow_rate"],
         "rain_3h":     predicted_rain_3h,
         "rise_rate":   rise_rate + (forecast_3h * 0.1),
         "month":       month
     }
-    pred_risk, pred_color, pred_conf = run_prediction(predicted_features, prediction_model)
-
-    # ── PREDICTED RISK (6 hours from now) ──
-    predicted_rain_6h = rain_3h + forecast_6h
-    predicted_wl_6h   = sensor["water_level"] + max(0, forecast_6h * 0.4)
-
-    predicted_features_6h = {
-        "total_rain":  sensor["rainfall"] + forecast_6h,
-        "water_level": predicted_wl_6h,
-        "flow_rate":   sensor["flow_rate"],
-        "rain_3h":     predicted_rain_6h,
-        "rise_rate":   rise_rate + (forecast_6h * 0.1),
-        "month":       month
-    }
-    pred_risk_6h, pred_color_6h, pred_conf_6h = run_prediction(predicted_features_6h, prediction_model)
+    pred_risk_3h, pred_color_3h, pred_conf_3h = run_prediction(predicted_features_3h, prediction_model)
 
     return {
         "current_risk":  current_risk,
         "current_color": current_color,
         "current_conf":  current_conf,
-        "pred_risk_3h":  pred_risk,
-        "pred_color_3h": pred_color,
-        "pred_conf_3h":  pred_conf,
-        "pred_risk_6h":  pred_risk_6h,
-        "pred_color_6h": pred_color_6h,
-        "pred_conf_6h":  pred_conf_6h,
+        "pred_risk_1h":  pred_risk_1h,
+        "pred_color_1h": pred_color_1h,
+        "pred_conf_1h":  pred_conf_1h,
+        "pred_risk_3h":  pred_risk_3h,
+        "pred_color_3h": pred_color_3h,
+        "pred_conf_3h":  pred_conf_3h,
         "rain_3h":       rain_3h,
         "rise_rate":     rise_rate,
+        "forecast_1h":   forecast_1h,
         "forecast_3h":   forecast_3h,
-        "forecast_6h":   forecast_6h,
+        # Legacy aliases kept for older UI pieces that may still read 3h/6h keys.
+        "pred_risk_6h":  pred_risk_3h,
+        "pred_color_6h": pred_color_3h,
+        "pred_conf_6h":  pred_conf_3h,
+        "forecast_6h":   forecast_3h,
     }
 
 # =========================================
@@ -787,19 +931,28 @@ def estimate_subside_time(risk_level, sensor_data, preds):
     forecast_3h = float(preds.get("forecast_3h") or 0)
     rise_rate   = float(preds.get("rise_rate")   or 0)
     rainfall    = float(sensor_data.get("rainfall") or 0)
+    rain_6h     = rain_3h + forecast_3h
 
     # Try ML regression model first
     reg = load_subside_model()
     if reg is not None:
         try:
-            X_sub = pd.DataFrame([{
+            feature_row = {
                 "total_rain":  rainfall,
                 "water_level": water_level,
                 "flow_rate":   float(sensor_data.get("flow_rate") or 0),
                 "rain_3h":     rain_3h,
+                "rain_6h":     rain_6h,
                 "rise_rate":   rise_rate,
                 "month":       datetime.now().month
-            }])
+            }
+            X_sub = pd.DataFrame([feature_row])
+            expected_cols = list(getattr(reg, "feature_names_in_", []))
+            if expected_cols:
+                for col in expected_cols:
+                    if col not in X_sub.columns:
+                        X_sub[col] = 0.0
+                X_sub = X_sub[expected_cols]
             predicted_hours = float(reg.predict(X_sub)[0])
             if 0.5 <= predicted_hours <= 48:
                 h_min = round(predicted_hours, 1)
@@ -849,17 +1002,19 @@ def build_location_payload(loc, clf, timestamp):
     weather      = get_weather_data(loc["lat"], loc["lng"])
     temp         = weather["temp"]
     humidity     = weather["humidity"]
+    forecast_1h  = weather["forecast_1h"]
     forecast_3h  = weather["forecast_3h"]
-    forecast_6h  = weather["forecast_6h"]
-    preds        = get_predictions(device_id, forecast_3h, forecast_6h, clf)
+    preds        = get_predictions(device_id, forecast_1h, forecast_3h, clf)
     trend_text, trend_color = trend_arrow(
-        preds["current_risk"], preds["pred_risk_3h"]
+        preds["current_risk"], preds["pred_risk_1h"]
     )
 
     sensor = latest_sensor_data[device_id]
     sub_display, sub_desc, sub_color = estimate_subside_time(
         preds["pred_risk_3h"], sensor, preds
     )
+    if not using_demo_state():
+        log_prediction_audit(device_id, sensor, preds, datetime.now(), clf is not None)
     subside_display = (
         f'<span style="color:{sub_color};font-weight:700">{sub_display}</span>'
     )
@@ -894,14 +1049,14 @@ def build_location_payload(loc, clf, timestamp):
         </div>
 
         <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
-                    border-left:3px solid {preds['pred_color_3h']}">
+                    border-left:3px solid {preds['pred_color_1h']}">
             <div style="font-size:11px;color:#64748b;text-transform:uppercase;
-                        letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 3 Hours</div>
-            <b style="font-size:16px;color:{preds['pred_color_3h']}">
-                {preds['pred_risk_3h']} Risk
+                        letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 1 Hour</div>
+            <b style="font-size:16px;color:{preds['pred_color_1h']}">
+                {preds['pred_risk_1h']} Risk
             </b>
             <span style="font-size:11px;color:#64748b;margin-left:6px">
-                {preds['pred_conf_3h']}% confidence
+                {preds['pred_conf_1h']}% confidence
             </span><br>
             <span style="font-size:11px;color:{trend_color}">
                 {trend_text}
@@ -909,14 +1064,14 @@ def build_location_payload(loc, clf, timestamp):
         </div>
 
         <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:8px;
-                    border-left:3px solid {preds['pred_color_6h']}">
+                    border-left:3px solid {preds['pred_color_3h']}">
             <div style="font-size:11px;color:#64748b;text-transform:uppercase;
-                        letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 6 Hours</div>
-            <b style="font-size:14px;color:{preds['pred_color_6h']}">
-                {preds['pred_risk_6h']} Risk
+                        letter-spacing:0.06em;margin-bottom:4px">🔮 Predicted — Next 3 Hours</div>
+            <b style="font-size:14px;color:{preds['pred_color_3h']}">
+                {preds['pred_risk_3h']} Risk
             </b>
             <span style="font-size:11px;color:#64748b;margin-left:6px">
-                {preds['pred_conf_6h']}% confidence
+                {preds['pred_conf_3h']}% confidence
             </span>
         </div>
 
@@ -939,8 +1094,8 @@ def build_location_payload(loc, clf, timestamp):
 
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
             <b style="color:#e2e8f0">── Weather Forecast ──</b><br>
+            🔮 Rain (next 1h): {fc_label(forecast_1h)}<br>
             🔮 Rain (next 3h): {fc_label(forecast_3h)}<br>
-            🔮 Rain (next 6h): {fc_label(forecast_6h)}<br>
             🌡 Temperature:    {temp:.1f} °C<br>
             💧 Humidity:       {humidity}%
         </div>
@@ -952,7 +1107,7 @@ def build_location_payload(loc, clf, timestamp):
     </div>
     """
 
-    marker_color = preds["current_color"] if using_demo_state() else preds["pred_color_3h"]
+    marker_color = preds["current_color"] if using_demo_state() else preds["pred_color_1h"]
 
     return {
         "id":               device_id,
@@ -964,6 +1119,9 @@ def build_location_payload(loc, clf, timestamp):
         "current_risk":     preds["current_risk"],
         "current_color":    preds["current_color"],
         "current_conf":     preds["current_conf"],
+        "pred_risk_1h":     preds["pred_risk_1h"],
+        "pred_color_1h":    preds["pred_color_1h"],
+        "pred_conf_1h":     preds["pred_conf_1h"],
         "pred_risk_3h":     preds["pred_risk_3h"],
         "pred_color_3h":    preds["pred_color_3h"],
         "pred_conf_3h":     preds["pred_conf_3h"],
@@ -976,8 +1134,9 @@ def build_location_payload(loc, clf, timestamp):
         "flow_rate":        sensor["flow_rate"],
         "rise_rate":        preds["rise_rate"],
         "rain_3h":          preds["rain_3h"],
+        "forecast_1h":      forecast_1h,
         "forecast_3h":      forecast_3h,
-        "forecast_6h":      forecast_6h,
+        "forecast_6h":      forecast_3h,
         "temperature":      temp,
         "humidity":         humidity,
         "subside_display":  sub_display,
@@ -1572,154 +1731,159 @@ def replay_event():
 @app.route("/api/actual-vs-predicted")
 def actual_vs_predicted():
     try:
-        from sklearn.ensemble import RandomForestClassifier
         from sklearn.metrics import accuracy_score, balanced_accuracy_score
-        from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
-        def empty_comparison_response(message, source_meta=None, class_counts=None):
-            counts = class_counts or {}
+        conn = get_db_connection()
+        sensor_df = pd.read_sql(
+            """
+            SELECT id, timestamp, device_id, total_rain, water_level, flow_rate, flooded
+            FROM sensor_readings
+            WHERE device_id IN ('bridge1', 'bridge2')
+            ORDER BY device_id, timestamp ASC, id ASC
+            """,
+            conn
+        )
+        conn.close()
+
+        if sensor_df.empty:
             return jsonify({
                 "setup_required": True,
-                "message": message,
-                "accuracy": 0.0,
-                "balanced_accuracy": None,
-                "correct": 0,
-                "total": 0,
-                "confusion": {
-                    "low_correct": 0,
-                    "mod_correct": 0,
-                    "high_correct": 0,
-                    "low_as_moderate": 0,
-                    "low_as_high": 0,
-                    "mod_as_low": 0,
-                    "mod_as_high": 0,
-                    "high_as_low": 0,
-                    "high_as_moderate": 0,
-                },
+                "message": "No bridge readings are available yet for historical prediction backtesting.",
+                "evaluation_method": "Historical backtest against later actual bridge readings",
                 "rows": [],
-                "class_counts": counts,
-                "prediction_counts": {},
-                "evaluation_method": message,
-                "sources": source_meta or {},
-                "error": None,
             }), 200
 
-        df, source_meta = load_labelled_training_data(limit_db=600)
+        sensor_df = prepare_feature_frame(sensor_df)
+        sensor_df["timestamp"] = pd.to_datetime(sensor_df["timestamp"])
+        sensor_df["interval_minutes"] = (
+            sensor_df.groupby("device_id")["timestamp"]
+            .diff()
+            .dt.total_seconds()
+            .div(60)
+        )
+        sensor_df["interval_minutes"] = sensor_df.groupby("device_id")["interval_minutes"].transform(
+            lambda s: s.fillna(s.dropna().median() if not s.dropna().empty else 10)
+        ).fillna(10).clip(lower=1)
 
-        if df.empty:
-            return empty_comparison_response("No labelled data in database", source_meta, {})
+        clf = load_model()
+        scored_rows = []
+        actual_numeric = []
+        predicted_numeric = []
+        horizon_stats = {
+            "1h": {"correct": 0, "total": 0, "pending": 0},
+            "3h": {"correct": 0, "total": 0, "pending": 0},
+        }
 
-        if len(df) < 30:
-            return empty_comparison_response(
-                f"Only {len(df)} labelled rows available. Need at least 30 for a fair comparison.",
-                source_meta,
-                {}
-            )
+        for device_id, group in sensor_df.groupby("device_id", sort=False):
+            group = group.reset_index(drop=True)
+            times = group["timestamp"].to_numpy()
+            for idx, row in group.iterrows():
+                base_time = row["timestamp"]
+                interval_minutes = float(row.get("interval_minutes") or 10)
+                rainfall_rate_per_hour = max(0.0, float(row.get("total_rain") or 0) * (60.0 / interval_minutes))
 
-        features = ["total_rain", "water_level", "flow_rate",
-                    "rain_3h", "rise_rate", "month"]
+                month = int(pd.Timestamp(base_time).month)
+                for horizon_key, horizon_hours in (("1h", 1), ("3h", 3)):
+                    target_time = pd.Timestamp(base_time) + pd.Timedelta(hours=horizon_hours)
+                    target_index = times.searchsorted(target_time.to_datetime64(), side="left")
+                    if target_index >= len(group):
+                        horizon_stats[horizon_key]["pending"] += 1
+                        continue
 
-        X            = df[features]
-        y_actual     = df["flooded"].astype(int)
-        class_counts = y_actual.value_counts().sort_index().to_dict()
+                    future_row = group.iloc[int(target_index)]
+                    actual_value = normalize_flood_label(future_row.get("flooded"))
+                    if actual_value is None:
+                        actual_value = int(bootstrap_label_from_features(future_row.to_dict()))
 
-        label_map = {0: "Low", 1: "Moderate", 2: "High"}
+                    predicted_additional_rain = rainfall_rate_per_hour * horizon_hours
+                    predicted_features = {
+                        "total_rain": float(row.get("total_rain") or 0) + predicted_additional_rain,
+                        "water_level": float(row.get("water_level") or 0) + max(0.0, predicted_additional_rain * 0.4),
+                        "flow_rate": float(row.get("flow_rate") or 0),
+                        "rain_3h": float(row.get("rain_3h") or 0) + predicted_additional_rain,
+                        "rise_rate": float(row.get("rise_rate") or 0) + (predicted_additional_rain * 0.1),
+                        "month": month,
+                    }
+                    predicted_label, _, confidence = run_prediction(predicted_features, clf)
+                    predicted_value = normalize_flood_label(predicted_label)
+                    if predicted_value is None:
+                        predicted_value = 0
 
-        def build_response(y_predicted, y_proba, accuracy_value, balanced_accuracy_value,
-                           method_text):
-            correct = int((y_actual.values == y_predicted).sum())
-            total = len(y_actual)
+                    is_match = predicted_value == actual_value
+                    horizon_stats[horizon_key]["total"] += 1
+                    if is_match:
+                        horizon_stats[horizon_key]["correct"] += 1
 
-            conf = {
-                "low_correct":      int(((y_actual == 0) & (y_predicted == 0)).sum()),
-                "mod_correct":      int(((y_actual == 1) & (y_predicted == 1)).sum()),
-                "high_correct":     int(((y_actual == 2) & (y_predicted == 2)).sum()),
-                "low_as_moderate":  int(((y_actual == 0) & (y_predicted == 1)).sum()),
-                "low_as_high":      int(((y_actual == 0) & (y_predicted == 2)).sum()),
-                "mod_as_low":       int(((y_actual == 1) & (y_predicted == 0)).sum()),
-                "mod_as_high":      int(((y_actual == 1) & (y_predicted == 2)).sum()),
-                "high_as_low":      int(((y_actual == 2) & (y_predicted == 0)).sum()),
-                "high_as_moderate": int(((y_actual == 2) & (y_predicted == 1)).sum()),
+                    actual_numeric.append(actual_value)
+                    predicted_numeric.append(predicted_value)
+                    scored_rows.append({
+                        "prediction_time": base_time.isoformat(),
+                        "actual_time": future_row["timestamp"].isoformat() if hasattr(future_row["timestamp"], "isoformat") else str(future_row["timestamp"]),
+                        "device_id": device_id,
+                        "horizon": horizon_key,
+                        "actual": flood_label_text(actual_value),
+                        "predicted": flood_label_text(predicted_value),
+                        "confidence": round(float(confidence), 1),
+                        "match": is_match,
+                    })
+
+        if not scored_rows:
+            return jsonify({
+                "setup_required": True,
+                "message": "Historical predictions are not ready yet because the dataset does not have enough later readings for 1-hour or 3-hour comparisons.",
+                "evaluation_method": "Historical backtest against later actual bridge readings",
+                "rows": [],
+            }), 200
+
+        label_names = {0: "Low", 1: "Moderate", 2: "High"}
+        class_counts = pd.Series(actual_numeric).value_counts().sort_index().to_dict()
+        prediction_counts = pd.Series(predicted_numeric).value_counts().sort_index().to_dict()
+        correct_by_class = {
+            "low_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 0 and p == 0)),
+            "mod_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 1 and p == 1)),
+            "high_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 2 and p == 2)),
+        }
+        wrong_by_class = {
+            "low_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 0 and p != 0)),
+            "mod_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 1 and p != 1)),
+            "high_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 2 and p != 2)),
+        }
+
+        total = len(actual_numeric)
+        correct = int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == p))
+        accuracy = round(float(accuracy_score(actual_numeric, predicted_numeric) * 100), 1)
+        balanced = None
+        if len(set(actual_numeric)) >= 2:
+            balanced = round(float(balanced_accuracy_score(actual_numeric, predicted_numeric) * 100), 1)
+
+        horizons = {}
+        for key, values in horizon_stats.items():
+            h_total = values["total"]
+            h_correct = values["correct"]
+            horizons[key] = {
+                "accuracy": round((h_correct / h_total) * 100, 1) if h_total else None,
+                "correct": h_correct,
+                "total": h_total,
+                "pending": values["pending"],
             }
 
-            prediction_counts = pd.Series(y_predicted).value_counts().sort_index().to_dict()
+        scored_rows.sort(key=lambda item: item["prediction_time"], reverse=True)
 
-            rows = []
-            df_tail = df.tail(30).copy()
-            preds_tail = y_predicted[-30:]
-            probas_tail = y_proba[-30:]
-
-            for i, (_, row) in enumerate(df_tail.iterrows()):
-                actual = int(row["flooded"])
-                predicted = int(preds_tail[i])
-                conf_pct = round(float(max(probas_tail[i])) * 100, 1)
-                rows.append({
-                    "timestamp": row["timestamp"].isoformat(),
-                    "device_id": row.get("device_id", "bridge1"),
-                    "actual": label_map.get(actual, "Low"),
-                    "predicted": label_map.get(predicted, "Low"),
-                    "confidence": conf_pct,
-                    "match": actual == predicted,
-                    "rain": round(float(row["total_rain"]), 2),
-                    "water_level": round(float(row["water_level"]), 2),
-                })
-
-            return jsonify({
-                "accuracy": round(float(accuracy_value), 1),
-                "balanced_accuracy": None if balanced_accuracy_value is None else round(float(balanced_accuracy_value), 1),
-                "correct": correct,
-                "total": total,
-                "confusion": conf,
-                "rows": rows,
-                "class_counts": class_counts,
-                "prediction_counts": prediction_counts,
-                "evaluation_method": method_text,
-                "sources": source_meta,
-            })
-
-        fallback_model = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=8,
-            min_samples_split=6,
-            min_samples_leaf=3,
-            class_weight="balanced_subsample",
-            random_state=42
-        )
-
-        if len(class_counts) < 2:
-            return empty_comparison_response(
-                "Actual vs Predicted will appear after the dataset includes at least two labelled flood classes.",
-                source_meta,
-                class_counts
-            )
-
-        min_class_count = min(class_counts.values())
-        if min_class_count < 2:
-            return empty_comparison_response(
-                "Actual vs Predicted needs at least two labelled rows in each available flood class before cross-validation can run.",
-                source_meta,
-                class_counts
-            )
-
-        n_splits = min(5, int(min_class_count))
-        if n_splits < 2:
-            return empty_comparison_response(
-                "Actual vs Predicted needs more class diversity before cross-validation can run.",
-                source_meta,
-                class_counts
-            )
-
-        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        y_predicted = cross_val_predict(fallback_model, X, y_actual, cv=cv, method="predict")
-        y_proba = cross_val_predict(fallback_model, X, y_actual, cv=cv, method="predict_proba")
-
-        return build_response(
-            y_predicted,
-            y_proba,
-            accuracy_score(y_actual, y_predicted) * 100,
-            balanced_accuracy_score(y_actual, y_predicted) * 100,
-            f"{n_splits}-fold stratified cross-validation on labelled rows"
-        )
+        return jsonify({
+            "setup_required": False,
+            "message": "Historical backtest compares each 1-hour and 3-hour prediction against the later actual bridge reading gathered after that prediction window.",
+            "evaluation_method": "Historical backtest on all past bridge readings using later actual gathered data",
+            "accuracy": accuracy,
+            "balanced_accuracy": balanced,
+            "correct": correct,
+            "total": total,
+            "class_counts": class_counts,
+            "prediction_counts": prediction_counts,
+            "correct_by_class": correct_by_class,
+            "wrong_by_class": wrong_by_class,
+            "horizons": horizons,
+            "rows": scored_rows[:30],
+        }), 200
 
     except Exception as e:
         print(f"❌ Actual vs Predicted error: {e}")
