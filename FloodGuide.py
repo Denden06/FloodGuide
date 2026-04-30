@@ -1452,6 +1452,160 @@ def map_data():
 def dashboard():
     return render_template("dashboard.html")
 
+def compute_actual_vs_predicted_payload():
+    from sklearn.metrics import accuracy_score, balanced_accuracy_score
+
+    conn = get_db_connection()
+    sensor_df = pd.read_sql(
+        """
+        SELECT id, timestamp, device_id, total_rain, water_level, flow_rate, flooded
+        FROM sensor_readings
+        WHERE device_id IN ('bridge1', 'bridge2')
+        ORDER BY device_id, timestamp ASC, id ASC
+        """,
+        conn
+    )
+    conn.close()
+
+    if sensor_df.empty:
+        return {
+            "setup_required": True,
+            "message": "No bridge readings are available yet for historical prediction backtesting.",
+            "evaluation_method": "Historical backtest against later actual bridge readings",
+            "rows": [],
+        }
+
+    sensor_df = prepare_feature_frame(sensor_df)
+    sensor_df["timestamp"] = pd.to_datetime(sensor_df["timestamp"])
+    sensor_df["interval_minutes"] = (
+        sensor_df.groupby("device_id")["timestamp"]
+        .diff()
+        .dt.total_seconds()
+        .div(60)
+    )
+    sensor_df["interval_minutes"] = sensor_df.groupby("device_id")["interval_minutes"].transform(
+        lambda s: s.fillna(s.dropna().median() if not s.dropna().empty else 10)
+    ).fillna(10).clip(lower=1)
+
+    clf = load_model()
+    scored_rows = []
+    actual_numeric = []
+    predicted_numeric = []
+    horizon_stats = {
+        "1h": {"correct": 0, "total": 0, "pending": 0},
+        "3h": {"correct": 0, "total": 0, "pending": 0},
+    }
+
+    for device_id, group in sensor_df.groupby("device_id", sort=False):
+        group = group.reset_index(drop=True)
+        times = group["timestamp"].to_numpy()
+        for _, row in group.iterrows():
+            base_time = row["timestamp"]
+            interval_minutes = float(row.get("interval_minutes") or 10)
+            rainfall_rate_per_hour = max(0.0, float(row.get("total_rain") or 0) * (60.0 / interval_minutes))
+
+            month = int(pd.Timestamp(base_time).month)
+            for horizon_key, horizon_hours in (("1h", 1), ("3h", 3)):
+                target_time = pd.Timestamp(base_time) + pd.Timedelta(hours=horizon_hours)
+                target_index = times.searchsorted(target_time.to_datetime64(), side="left")
+                if target_index >= len(group):
+                    horizon_stats[horizon_key]["pending"] += 1
+                    continue
+
+                future_row = group.iloc[int(target_index)]
+                actual_value = normalize_flood_label(future_row.get("flooded"))
+                if actual_value is None:
+                    actual_value = int(bootstrap_label_from_features(future_row.to_dict()))
+
+                predicted_additional_rain = rainfall_rate_per_hour * horizon_hours
+                predicted_features = {
+                    "total_rain": float(row.get("total_rain") or 0) + predicted_additional_rain,
+                    "water_level": float(row.get("water_level") or 0) + max(0.0, predicted_additional_rain * 0.4),
+                    "flow_rate": float(row.get("flow_rate") or 0),
+                    "rain_3h": float(row.get("rain_3h") or 0) + predicted_additional_rain,
+                    "rise_rate": float(row.get("rise_rate") or 0) + (predicted_additional_rain * 0.1),
+                    "month": month,
+                }
+                predicted_label, _, confidence = run_prediction(predicted_features, clf)
+                predicted_value = normalize_flood_label(predicted_label)
+                if predicted_value is None:
+                    predicted_value = 0
+
+                is_match = predicted_value == actual_value
+                horizon_stats[horizon_key]["total"] += 1
+                if is_match:
+                    horizon_stats[horizon_key]["correct"] += 1
+
+                actual_numeric.append(actual_value)
+                predicted_numeric.append(predicted_value)
+                scored_rows.append({
+                    "prediction_time": base_time.isoformat(),
+                    "actual_time": future_row["timestamp"].isoformat() if hasattr(future_row["timestamp"], "isoformat") else str(future_row["timestamp"]),
+                    "device_id": device_id,
+                    "horizon": horizon_key,
+                    "actual": flood_label_text(actual_value),
+                    "predicted": flood_label_text(predicted_value),
+                    "confidence": round(float(confidence), 1),
+                    "match": is_match,
+                })
+
+    if not scored_rows:
+        return {
+            "setup_required": True,
+            "message": "Historical predictions are not ready yet because the dataset does not have enough later readings for 1-hour or 3-hour comparisons.",
+            "evaluation_method": "Historical backtest against later actual bridge readings",
+            "rows": [],
+        }
+
+    class_counts = pd.Series(actual_numeric).value_counts().sort_index().to_dict()
+    prediction_counts = pd.Series(predicted_numeric).value_counts().sort_index().to_dict()
+    correct_by_class = {
+        "low_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 0 and p == 0)),
+        "mod_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 1 and p == 1)),
+        "high_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 2 and p == 2)),
+    }
+    wrong_by_class = {
+        "low_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 0 and p != 0)),
+        "mod_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 1 and p != 1)),
+        "high_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 2 and p != 2)),
+    }
+
+    total = len(actual_numeric)
+    correct = int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == p))
+    accuracy = round(float(accuracy_score(actual_numeric, predicted_numeric) * 100), 1)
+    balanced = None
+    if len(set(actual_numeric)) >= 2:
+        balanced = round(float(balanced_accuracy_score(actual_numeric, predicted_numeric) * 100), 1)
+
+    horizons = {}
+    for key, values in horizon_stats.items():
+        h_total = values["total"]
+        h_correct = values["correct"]
+        horizons[key] = {
+            "accuracy": round((h_correct / h_total) * 100, 1) if h_total else None,
+            "correct": h_correct,
+            "total": h_total,
+            "pending": values["pending"],
+        }
+
+    scored_rows.sort(key=lambda item: item["prediction_time"], reverse=True)
+
+    return {
+        "setup_required": False,
+        "message": "Historical backtest compares each 1-hour and 3-hour prediction against the later actual bridge reading gathered after that prediction window.",
+        "evaluation_method": "Historical backtest on all past bridge readings using later actual gathered data",
+        "accuracy": accuracy,
+        "balanced_accuracy": balanced,
+        "correct": correct,
+        "total": total,
+        "class_counts": class_counts,
+        "prediction_counts": prediction_counts,
+        "correct_by_class": correct_by_class,
+        "wrong_by_class": wrong_by_class,
+        "horizons": horizons,
+        "rows": scored_rows[:30],
+    }
+
 @app.route("/api/dashboard-data")
 def dashboard_data():
     try:
@@ -1500,7 +1654,7 @@ def dashboard_data():
                 out.append(row)
             return out
 
-        return jsonify({
+        payload = {
             "bridge1": serialize(bridge1),
             "bridge2": serialize(bridge2),
             "bridges": live_by_bridge,
@@ -1512,7 +1666,10 @@ def dashboard_data():
                 "mode_label": "Random Forest" if ml_active else "Threshold Rules",
                 "maps_key_loaded": bool(GOOGLE_MAPS_API_KEY)
             }
-        })
+        }
+        if request.args.get("include_comparison") == "1":
+            payload["actual_vs_predicted"] = compute_actual_vs_predicted_payload()
+        return jsonify(payload)
 
     except Exception as e:
         print(f"❌ Dashboard data error: {e}")
@@ -1768,160 +1925,7 @@ def replay_event():
 @app.route("/api/actual-vs-predicted")
 def actual_vs_predicted():
     try:
-        from sklearn.metrics import accuracy_score, balanced_accuracy_score
-
-        conn = get_db_connection()
-        sensor_df = pd.read_sql(
-            """
-            SELECT id, timestamp, device_id, total_rain, water_level, flow_rate, flooded
-            FROM sensor_readings
-            WHERE device_id IN ('bridge1', 'bridge2')
-            ORDER BY device_id, timestamp ASC, id ASC
-            """,
-            conn
-        )
-        conn.close()
-
-        if sensor_df.empty:
-            return jsonify({
-                "setup_required": True,
-                "message": "No bridge readings are available yet for historical prediction backtesting.",
-                "evaluation_method": "Historical backtest against later actual bridge readings",
-                "rows": [],
-            }), 200
-
-        sensor_df = prepare_feature_frame(sensor_df)
-        sensor_df["timestamp"] = pd.to_datetime(sensor_df["timestamp"])
-        sensor_df["interval_minutes"] = (
-            sensor_df.groupby("device_id")["timestamp"]
-            .diff()
-            .dt.total_seconds()
-            .div(60)
-        )
-        sensor_df["interval_minutes"] = sensor_df.groupby("device_id")["interval_minutes"].transform(
-            lambda s: s.fillna(s.dropna().median() if not s.dropna().empty else 10)
-        ).fillna(10).clip(lower=1)
-
-        clf = load_model()
-        scored_rows = []
-        actual_numeric = []
-        predicted_numeric = []
-        horizon_stats = {
-            "1h": {"correct": 0, "total": 0, "pending": 0},
-            "3h": {"correct": 0, "total": 0, "pending": 0},
-        }
-
-        for device_id, group in sensor_df.groupby("device_id", sort=False):
-            group = group.reset_index(drop=True)
-            times = group["timestamp"].to_numpy()
-            for idx, row in group.iterrows():
-                base_time = row["timestamp"]
-                interval_minutes = float(row.get("interval_minutes") or 10)
-                rainfall_rate_per_hour = max(0.0, float(row.get("total_rain") or 0) * (60.0 / interval_minutes))
-
-                month = int(pd.Timestamp(base_time).month)
-                for horizon_key, horizon_hours in (("1h", 1), ("3h", 3)):
-                    target_time = pd.Timestamp(base_time) + pd.Timedelta(hours=horizon_hours)
-                    target_index = times.searchsorted(target_time.to_datetime64(), side="left")
-                    if target_index >= len(group):
-                        horizon_stats[horizon_key]["pending"] += 1
-                        continue
-
-                    future_row = group.iloc[int(target_index)]
-                    actual_value = normalize_flood_label(future_row.get("flooded"))
-                    if actual_value is None:
-                        actual_value = int(bootstrap_label_from_features(future_row.to_dict()))
-
-                    predicted_additional_rain = rainfall_rate_per_hour * horizon_hours
-                    predicted_features = {
-                        "total_rain": float(row.get("total_rain") or 0) + predicted_additional_rain,
-                        "water_level": float(row.get("water_level") or 0) + max(0.0, predicted_additional_rain * 0.4),
-                        "flow_rate": float(row.get("flow_rate") or 0),
-                        "rain_3h": float(row.get("rain_3h") or 0) + predicted_additional_rain,
-                        "rise_rate": float(row.get("rise_rate") or 0) + (predicted_additional_rain * 0.1),
-                        "month": month,
-                    }
-                    predicted_label, _, confidence = run_prediction(predicted_features, clf)
-                    predicted_value = normalize_flood_label(predicted_label)
-                    if predicted_value is None:
-                        predicted_value = 0
-
-                    is_match = predicted_value == actual_value
-                    horizon_stats[horizon_key]["total"] += 1
-                    if is_match:
-                        horizon_stats[horizon_key]["correct"] += 1
-
-                    actual_numeric.append(actual_value)
-                    predicted_numeric.append(predicted_value)
-                    scored_rows.append({
-                        "prediction_time": base_time.isoformat(),
-                        "actual_time": future_row["timestamp"].isoformat() if hasattr(future_row["timestamp"], "isoformat") else str(future_row["timestamp"]),
-                        "device_id": device_id,
-                        "horizon": horizon_key,
-                        "actual": flood_label_text(actual_value),
-                        "predicted": flood_label_text(predicted_value),
-                        "confidence": round(float(confidence), 1),
-                        "match": is_match,
-                    })
-
-        if not scored_rows:
-            return jsonify({
-                "setup_required": True,
-                "message": "Historical predictions are not ready yet because the dataset does not have enough later readings for 1-hour or 3-hour comparisons.",
-                "evaluation_method": "Historical backtest against later actual bridge readings",
-                "rows": [],
-            }), 200
-
-        label_names = {0: "Low", 1: "Moderate", 2: "High"}
-        class_counts = pd.Series(actual_numeric).value_counts().sort_index().to_dict()
-        prediction_counts = pd.Series(predicted_numeric).value_counts().sort_index().to_dict()
-        correct_by_class = {
-            "low_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 0 and p == 0)),
-            "mod_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 1 and p == 1)),
-            "high_correct": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 2 and p == 2)),
-        }
-        wrong_by_class = {
-            "low_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 0 and p != 0)),
-            "mod_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 1 and p != 1)),
-            "high_wrong": int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == 2 and p != 2)),
-        }
-
-        total = len(actual_numeric)
-        correct = int(sum(1 for a, p in zip(actual_numeric, predicted_numeric) if a == p))
-        accuracy = round(float(accuracy_score(actual_numeric, predicted_numeric) * 100), 1)
-        balanced = None
-        if len(set(actual_numeric)) >= 2:
-            balanced = round(float(balanced_accuracy_score(actual_numeric, predicted_numeric) * 100), 1)
-
-        horizons = {}
-        for key, values in horizon_stats.items():
-            h_total = values["total"]
-            h_correct = values["correct"]
-            horizons[key] = {
-                "accuracy": round((h_correct / h_total) * 100, 1) if h_total else None,
-                "correct": h_correct,
-                "total": h_total,
-                "pending": values["pending"],
-            }
-
-        scored_rows.sort(key=lambda item: item["prediction_time"], reverse=True)
-
-        return jsonify({
-            "setup_required": False,
-            "message": "Historical backtest compares each 1-hour and 3-hour prediction against the later actual bridge reading gathered after that prediction window.",
-            "evaluation_method": "Historical backtest on all past bridge readings using later actual gathered data",
-            "accuracy": accuracy,
-            "balanced_accuracy": balanced,
-            "correct": correct,
-            "total": total,
-            "class_counts": class_counts,
-            "prediction_counts": prediction_counts,
-            "correct_by_class": correct_by_class,
-            "wrong_by_class": wrong_by_class,
-            "horizons": horizons,
-            "rows": scored_rows[:30],
-        }), 200
-
+        return jsonify(compute_actual_vs_predicted_payload()), 200
     except Exception as e:
         print(f"❌ Actual vs Predicted error: {e}")
         return jsonify({
