@@ -32,6 +32,9 @@ MODEL_PATH = "model_class.pkl"
 PAGASA_DATASET_PATH = os.getenv("PAGASA_DATASET_PATH", "pagasa_labeled.csv")
 BOOTSTRAP_TABLE = "bootstrap_training_data"
 PREDICTION_AUDIT_TABLE = "prediction_audit"
+READING_INTERVAL_MINUTES = 10
+RAIN_3H_WINDOW_READINGS = max(1, int(180 / READING_INTERVAL_MINUTES))
+RISE_RATE_WINDOW_READINGS = 1
 GOOGLE_MAPS_API_KEY = os.getenv(
     "GOOGLE_MAPS_API_KEY",
     "AIzaSyBfyF6DofStbAoUKcG83eEBE72OpaLqTus"
@@ -118,11 +121,11 @@ def prepare_feature_frame(df):
 
     if "device_id" in work.columns:
         work["rain_3h"] = work.groupby("device_id")["total_rain"].transform(
-            lambda s: s.rolling(window=3, min_periods=1).sum()
+            lambda s: s.rolling(window=RAIN_3H_WINDOW_READINGS, min_periods=1).sum()
         )
         work["rise_rate"] = work.groupby("device_id")["water_level"].diff().fillna(0)
     else:
-        work["rain_3h"] = work["total_rain"].rolling(window=3, min_periods=1).sum()
+        work["rain_3h"] = work["total_rain"].rolling(window=RAIN_3H_WINDOW_READINGS, min_periods=1).sum()
         work["rise_rate"] = work["water_level"].diff().fillna(0)
 
     work["month"] = work["timestamp"].dt.month
@@ -427,9 +430,9 @@ def derive_actual_label(cursor, device_id, actual_row):
         FROM sensor_readings
         WHERE device_id = %s AND timestamp <= %s
         ORDER BY timestamp DESC, id DESC
-        LIMIT 18
+        LIMIT %s
         """,
-        (device_id, actual_row["timestamp"])
+        (device_id, actual_row["timestamp"], RAIN_3H_WINDOW_READINGS)
     )
     rows = cursor.fetchall()
     if rows:
@@ -672,7 +675,7 @@ def get_training_mode_status():
 # =========================================
 # FETCH RECENT READINGS PER DEVICE
 # =========================================
-def get_recent_readings(device_id, n=6):
+def get_recent_readings(device_id, n=RAIN_3H_WINDOW_READINGS):
     try:
         conn   = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -800,7 +803,7 @@ def run_prediction(features, clf):
 # =========================================
 def get_predictions(device_id, forecast_1h, forecast_3h, clf):
     sensor  = latest_sensor_data[device_id].copy()
-    history = [] if using_demo_state() else get_recent_readings(device_id, 6)
+    history = [] if using_demo_state() else get_recent_readings(device_id, RAIN_3H_WINDOW_READINGS)
 
     # Compute rolling features from actual history
     if using_demo_state():
@@ -809,7 +812,7 @@ def get_predictions(device_id, forecast_1h, forecast_3h, clf):
     elif len(history) >= 2:
         rain_values  = [r["total_rain"]  for r in history]
         water_values = [r["water_level"] for r in history]
-        rain_3h   = sum(rain_values[-3:]) if len(rain_values) >= 3 else sum(rain_values)
+        rain_3h   = sum(rain_values[-RAIN_3H_WINDOW_READINGS:]) if len(rain_values) >= RAIN_3H_WINDOW_READINGS else sum(rain_values)
         rise_rate = water_values[-1] - water_values[-2]
     else:
         rain_3h   = sensor["rainfall"]
@@ -1160,7 +1163,7 @@ def apply_sensor_row(device_id, row):
     latest_sensor_data[device_id]["rainfall"]    = float(row.get("total_rain") or 0)
     latest_sensor_data[device_id]["flow_rate"]   = float(row.get("flow_rate") or 0)
     flooded = int(row.get("flooded") or 0) if row.get("flooded") is not None else 0
-    latest_sensor_data[device_id]["rain_3h"]     = float(row.get("total_rain") or 0) * 2.5
+    latest_sensor_data[device_id]["rain_3h"]     = float(row.get("rain_3h", row.get("total_rain", 0)) or 0)
     latest_sensor_data[device_id]["rise_rate"]   = 6.0 if flooded >= 2 else (3.0 if flooded == 1 else 0.0)
 
 
@@ -1176,7 +1179,7 @@ def apply_simulation_values(device_id, values, level):
     latest_sensor_data[device_id]["water_level"] = float(values.get("water_level") or 0)
     latest_sensor_data[device_id]["rainfall"] = float(values.get("rainfall") or 0)
     latest_sensor_data[device_id]["flow_rate"] = float(values.get("flow_rate") or 0)
-    latest_sensor_data[device_id]["rain_3h"] = float(values.get("rainfall") or 0) * 2.5
+    latest_sensor_data[device_id]["rain_3h"] = float(values.get("rain_3h", values.get("rainfall", 0)) or 0)
     latest_sensor_data[device_id]["rise_rate"] = (
         2.0 if level == "moderate" else (5.0 if level == "high" else 0.0)
     )
