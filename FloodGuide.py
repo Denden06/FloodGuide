@@ -1667,8 +1667,24 @@ def dashboard_data():
                 "maps_key_loaded": bool(GOOGLE_MAPS_API_KEY)
             }
         }
+        if request.args.get("include_training") == "1":
+            try:
+                payload["training_status"] = get_training_mode_status()
+            except Exception as training_error:
+                print(f"❌ Dashboard embedded training status error: {training_error}")
+                payload["training_status"] = {"error": str(training_error)}
         if request.args.get("include_comparison") == "1":
-            payload["actual_vs_predicted"] = compute_actual_vs_predicted_payload()
+            try:
+                payload["actual_vs_predicted"] = compute_actual_vs_predicted_payload()
+            except Exception as comparison_error:
+                print(f"❌ Dashboard embedded actual-vs-predicted error: {comparison_error}")
+                payload["actual_vs_predicted"] = {
+                    "setup_required": True,
+                    "error": str(comparison_error),
+                    "message": "Actual vs Predicted is temporarily unavailable on the server.",
+                    "rows": [],
+                    "horizons": {"1h": {"pending": 0}, "3h": {"pending": 0}},
+                }
         return jsonify(payload)
 
     except Exception as e:

@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>FloodGuide – Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',sans-serif;background:#0a0f1e;color:#e2e8f0;min-height:100vh}
+
+    /* ── TOPBAR ── */
+    .topbar{min-height:56px;background:rgba(15,23,42,.97);border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;padding:.6rem 2rem;position:sticky;top:0;z-index:100;gap:.8rem;flex-wrap:wrap}
+    .logo{font-size:.95rem;font-weight:700;color:#38bdf8;letter-spacing:.06em}
+    .logo span{color:#334155;font-weight:400}
+    .topbar-right{display:flex;align-items:center;gap:.5rem}
+    .live-dot-wrap{display:flex;align-items:center;gap:.4rem;font-size:.65rem;font-weight:600;color:#22c55e;text-transform:uppercase;letter-spacing:.08em}
+    .live-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;animation:blink 2s infinite}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+    .tnav{display:flex;align-items:center;gap:.3rem}
+    .tbtn{padding:.55rem .95rem;border-radius:9px;font-size:.82rem;font-weight:600;text-decoration:none;border:1px solid #1e293b;background:transparent;color:#64748b;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap;min-height:44px;display:inline-flex;align-items:center;justify-content:center}
+    .tbtn:hover{background:#1e293b;color:#e2e8f0;border-color:#334155}
+    .tbtn.active{background:#38bdf820;border-color:#38bdf860;color:#38bdf8}
+    .tbtn.thresh{background:#f59e0b18;border-color:#f59e0b60;color:#f59e0b}
+    .tbtn.thresh:hover{background:#f59e0b28}
+    .tbtn.rfbtn{background:#22c55e18;border-color:#22c55e60;color:#22c55e}
+    .tbtn.rfbtn:hover{background:#22c55e28}
+
+    /* ── LAYOUT ── */
+    .page{max-width:1280px;margin:0 auto;padding:2rem}
+    .page-title{font-size:.65rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.12em;margin-bottom:1.5rem}
+
+    /* ── BRIDGE CARDS ── */
+    .bridge-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem}
+    @media(max-width:768px){.bridge-grid{grid-template-columns:1fr}}
+    .bridge-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:1.4rem;position:relative;overflow:hidden}
+    .bridge-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+    .bridge-card.low::before{background:#22c55e}
+    .bridge-card.moderate::before{background:#f59e0b}
+    .bridge-card.high::before{background:#ef4444;animation:pulseBar 1.5s infinite}
+    @keyframes pulseBar{0%,100%{opacity:1}50%{opacity:.5}}
+    .bridge-name{font-size:.62rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.5rem}
+    .risk-row{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:.75rem}
+    .risk-label{font-size:1.8rem;font-weight:700;line-height:1}
+    .risk-low{color:#22c55e}.risk-moderate{color:#f59e0b}.risk-high{color:#ef4444}
+    .risk-trend{font-size:.68rem;font-weight:700;white-space:nowrap;padding:.28rem .55rem;border-radius:999px;background:#0a0f1e;color:#94a3b8}
+    .pill-row{display:flex;flex-wrap:wrap;gap:.45rem;margin-bottom:.8rem}
+    .pill{background:#0a0f1e;border:1px solid #1e293b;border-radius:999px;padding:.28rem .6rem;font-size:.62rem;color:#94a3b8}
+    .pill b{color:#e2e8f0;font-weight:600}
+    .sensor-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;margin-bottom:.6rem}
+    @media(max-width:960px){.sensor-grid{grid-template-columns:1fr 1fr}}
+    .sensor-item{background:#0a0f1e;border-radius:8px;padding:.6rem .8rem}
+    .sensor-lbl{font-size:.55rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.25rem}
+    .sensor-val{font-size:1rem;font-weight:600;color:#38bdf8;line-height:1}
+    .sensor-unit{font-size:.6rem;color:#475569;margin-left:.2rem}
+    .card-footer{font-size:.6rem;color:#334155;margin-top:.5rem;line-height:1.6}
+
+    /* ── STAT CARDS ── */
+    .stats-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:1rem;margin-bottom:1.5rem}
+    @media(max-width:1024px){.stats-grid{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:640px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
+    .stat-card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:1rem 1.1rem}
+    .stat-lbl{font-size:.55rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.4rem}
+    .stat-val{font-size:1.6rem;font-weight:700;line-height:1;color:#e2e8f0}
+    .stat-sub{font-size:.6rem;color:#334155;margin-top:.2rem}
+    .stat-high{color:#ef4444}.stat-mod{color:#f59e0b}.stat-blue{color:#38bdf8}
+
+    /* ── CHARTS ── */
+    .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem}
+    @media(max-width:900px){.charts-grid{grid-template-columns:1fr}}
+    .chart-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:1.2rem}
+    .chart-title{font-size:.62rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:1rem}
+    .chart-wrap{position:relative;height:180px}
+
+    /* ── RECENT TABLE ── */
+    .table-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:1.2rem;margin-bottom:1.5rem}
+    .table-title{font-size:.62rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.85rem}
+    .data-table{width:100%;border-collapse:collapse;font-size:.68rem}
+    .data-table th{color:#334155;text-align:left;padding:.4rem .5rem;border-bottom:1px solid #1e293b;font-weight:500;text-transform:uppercase;letter-spacing:.05em;font-size:.55rem}
+    .data-table td{padding:.42rem .5rem;border-bottom:1px solid #0f172a80;color:#94a3b8}
+    .data-table tr:last-child td{border-bottom:none}
+    .data-table tr:hover td{background:#ffffff04}
+    .rbadge{display:inline-block;padding:.05rem .4rem;border-radius:4px;font-size:.58rem;font-weight:700}
+    .rb-low{background:#22c55e18;color:#22c55e}
+    .rb-moderate{background:#f59e0b18;color:#f59e0b}
+    .rb-high{background:#ef444418;color:#ef4444}
+
+    /* ── THRESHOLD MODAL ── */
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:none;align-items:center;justify-content:center}
+    .modal-overlay.open{display:flex}
+    .modal{background:#0f172a;border:1px solid #1e293b;border-radius:14px;padding:1.5rem;width:380px;max-width:90vw;max-height:85vh;overflow-y:auto}
+    .modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.1rem}
+    .modal-title{font-size:.7rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em}
+    .modal-close{cursor:pointer;color:#475569;font-size:1.2rem;transition:color .15s}
+    .modal-close:hover{color:#e2e8f0}
+    .thresh-sec{font-size:.6rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.06em;margin:.9rem 0 .35rem}
+    .thresh-row{display:flex;justify-content:space-between;align-items:center;padding:.35rem 0;border-bottom:1px solid #ffffff06}
+    .thresh-row:last-child{border-bottom:none}
+    .thresh-lbl{font-size:.72rem;color:#94a3b8}
+    .chip{display:inline-block;padding:.1rem .45rem;border-radius:4px;font-size:.62rem;font-weight:700}
+    .chip-low{background:#22c55e20;color:#22c55e}
+    .chip-mod{background:#f59e0b20;color:#f59e0b}
+    .chip-high{background:#ef444420;color:#ef4444}
+
+    /* ── RF MODAL ── */
+    .feat-bar-wrap{margin-bottom:.5rem}
+    .feat-hdr{display:flex;justify-content:space-between;font-size:.65rem;margin-bottom:.2rem}
+    .feat-k{color:#94a3b8}.feat-p{color:#38bdf8;font-weight:600}
+    .feat-bg{height:4px;background:#1e293b;border-radius:3px;overflow:hidden}
+    .feat-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#38bdf8,#818cf8)}
+    .rf-row{display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid #ffffff06;font-size:.72rem}
+    .rf-row:last-child{border-bottom:none}
+    .rf-k{color:#64748b}.rf-v{color:#e2e8f0;font-weight:500}
+    .rf-status{display:flex;gap:.6rem;align-items:flex-start;margin-bottom:.85rem;padding:.65rem;background:#0a0f1e;border-radius:8px}
+    .rf-icon{font-size:1.5rem}
+    .rf-title{font-size:.85rem;font-weight:600;margin-bottom:.1rem}
+    .rf-sub{font-size:.65rem;color:#64748b}
+
+    /* ── TRAINING MODE ── */
+    .accuracy-box{background:#0a0f1e;border-radius:7px;padding:.85rem;margin-bottom:.85rem;text-align:center}
+    .acc-pct{font-size:2.4rem;font-weight:700;line-height:1}
+    .acc-lbl{font-size:.6rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.2rem}
+    .acc-sub{font-size:.67rem;color:#94a3b8;margin-top:.3rem}
+    .cg{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.38rem;margin-bottom:.85rem}
+    .cc{background:#0a0f1e;border-radius:6px;padding:.45rem;text-align:center}
+    .cn{font-size:1.1rem;font-weight:700}
+    .cl{font-size:.57rem;color:#64748b;margin-top:.1rem}
+    .train-actions{display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem}
+    .train-note{background:#0a0f1e;border-radius:7px;padding:.85rem;color:#94a3b8;font-size:.72rem;line-height:1.6}
+    .train-status{margin-top:.85rem}
+    .train-ok{color:#22c55e}
+    .train-warn{color:#f59e0b}
+    .train-muted{color:#64748b}
+    .section-head{display:flex;align-items:center;justify-content:space-between;gap:.8rem;flex-wrap:wrap;margin-bottom:.85rem}
+    .section-copy{font-size:.7rem;color:#64748b;line-height:1.55;margin-bottom:.85rem}
+    .comparison-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;margin-bottom:.85rem}
+    .comparison-stat{background:#0a0f1e;border-radius:8px;padding:.8rem;text-align:center}
+    .comparison-value{font-size:1.5rem;font-weight:700;line-height:1;color:#e2e8f0}
+    .comparison-label{font-size:.58rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.25rem}
+    .comparison-note{background:#0a0f1e;border-radius:7px;padding:.85rem;color:#94a3b8;font-size:.72rem;line-height:1.6;margin-bottom:.85rem}
+    .comparison-note.warn{border:1px solid #f59e0b40}
+    .comparison-hero{background:#0a0f1e;border-radius:8px;padding:1rem 1.2rem;text-align:center;margin-bottom:.85rem}
+    .comparison-hero .big{font-size:2.4rem;font-weight:700;line-height:1;color:#38bdf8}
+    .comparison-hero .sub{font-size:.62rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.2rem}
+    .comparison-hero .meta{font-size:.68rem;color:#94a3b8;line-height:1.55;margin-top:.35rem}
+    .comparison-block-title{font-size:.78rem;font-weight:600;color:#e2e8f0;margin:.25rem 0 .5rem}
+    .match-yes{color:#22c55e;font-weight:700}
+    .match-no{color:#ef4444;font-weight:700}
+    .btn-row{display:flex;gap:.6rem;flex-wrap:wrap}
+    @media(max-width:900px){.comparison-grid{grid-template-columns:1fr 1fr}}
+    @media(max-width:768px){
+      .page{padding:1rem}
+      .topbar{padding:.7rem 1rem}
+      .topbar-right{width:100%;justify-content:space-between;flex-wrap:wrap}
+      .tnav{width:100%;gap:.5rem;flex-wrap:wrap}
+      .tbtn{flex:1 1 140px;font-size:.9rem;padding:.75rem 1rem;min-height:48px}
+      .table-card,.chart-card,.bridge-card,.stat-card{padding:1rem}
+      .risk-label{font-size:1.55rem}
+      .pill{font-size:.72rem;padding:.4rem .7rem}
+      .sensor-val{font-size:1.08rem}
+      .train-actions .tbtn,.btn-row .tbtn{flex:1 1 180px}
+      .data-table{font-size:.78rem}
+      .data-table th{font-size:.62rem}
+      .data-table td{padding:.6rem .5rem}
+    }
+    @media(max-width:520px){
+      .stats-grid,.cg,.comparison-grid{grid-template-columns:1fr}
+      .sensor-grid{grid-template-columns:1fr}
+      .page-title{font-size:.72rem}
+      .modal{width:94vw;padding:1rem}
+      .section-head{align-items:flex-start}
+    }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">FLOOD<span>GUIDE</span></div>
+  <div class="topbar-right">
+    <div class="live-dot-wrap"><div class="live-dot"></div>Live</div>
+    <div class="tnav">
+      <a href="/" class="tbtn">Map View</a>
+      <a href="/dashboard" class="tbtn active">Dashboard</a>
+      <button class="tbtn thresh" onclick="openModal('threshModal')">⚠️ Thresholds</button>
+      <button class="tbtn rfbtn" id="rfBtnTop" onclick="openModal('rfModal')">🌲 Random Forest</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ THRESHOLD MODAL ══ -->
+<div class="modal-overlay" id="threshModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Flood Thresholds</div>
+      <span class="modal-close" onclick="closeModal('threshModal')">✕</span>
+    </div>
+    <div class="thresh-sec">Water Level (cm)</div>
+    <div class="thresh-row"><span class="thresh-lbl">Low risk</span><span class="chip chip-low">&lt; 80 cm</span></div>
+    <div class="thresh-row"><span class="thresh-lbl">Moderate risk</span><span class="chip chip-mod">80–150 cm</span></div>
+    <div class="thresh-row"><span class="thresh-lbl">High risk</span><span class="chip chip-high">&gt; 150 cm</span></div>
+    <div class="thresh-sec">Rainfall — 3-Hour Accumulation</div>
+    <div class="thresh-row"><span class="thresh-lbl">Low risk</span><span class="chip chip-low">&lt; 30 mm</span></div>
+    <div class="thresh-row"><span class="thresh-lbl">Moderate risk</span><span class="chip chip-mod">30–60 mm</span></div>
+    <div class="thresh-row"><span class="thresh-lbl">High risk</span><span class="chip chip-high">&gt; 60 mm</span></div>
+    <div class="thresh-sec">Flow Rate</div>
+    <div class="thresh-row"><span class="thresh-lbl">Moderate trigger</span><span class="chip chip-mod">&gt; 3.0 L</span></div>
+    <div class="thresh-sec">Rise Rate (cm/reading)</div>
+    <div class="thresh-row"><span class="thresh-lbl">High trigger</span><span class="chip chip-high">&gt; 10 cm + WL &gt; 100</span></div>
+    <div style="margin-top:.9rem;padding:.5rem .65rem;border-radius:6px;background:#0a0f1e;font-size:.62rem;color:#334155;line-height:1.55">
+      Source: PAGASA rainfall warning thresholds and Mandaue City DRRMO flood guidelines.<br>ML model trained on DOST-PAGASA Mactan Station data 2020–2024.
+    </div>
+  </div>
+</div>
+
+<!-- ══ RANDOM FOREST MODAL ══ -->
+<div class="modal-overlay" id="rfModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Prediction Model</div>
+      <span class="modal-close" onclick="closeModal('rfModal')">✕</span>
+    </div>
+    <div class="rf-status">
+      <div class="rf-icon">🌲</div>
+      <div>
+        <div class="rf-title" id="rfModalTitle" style="color:#22c55e">Random Forest Active</div>
+        <div class="rf-sub" id="rfModalSub">ML model loaded and predicting</div>
+      </div>
+    </div>
+    <div class="rf-row"><span class="rf-k">Algorithm</span><span class="rf-v">Random Forest Classifier</span></div>
+    <div class="rf-row"><span class="rf-k">Trees</span><span class="rf-v">200 estimators</span></div>
+    <div class="rf-row"><span class="rf-k">Max depth</span><span class="rf-v">8 levels</span></div>
+    <div class="rf-row"><span class="rf-k">Training data</span><span class="rf-v">Bootstrap dataset + optional PAGASA CSV</span></div>
+    <div class="rf-row"><span class="rf-k">Training samples</span><span class="rf-v" id="rfTrainSamples">Built from historical sensor rows</span></div>
+    <div class="rf-row"><span class="rf-k">Training mode</span><span class="rf-v" style="color:#38bdf8">Threshold bootstrap then retrain</span></div>
+    <div class="rf-row"><span class="rf-k">Estimated accuracy</span><span class="rf-v" id="rfEvalAccuracy" style="color:#64748b">Build dataset first</span></div>
+    <div class="rf-row"><span class="rf-k">Evaluation method</span><span class="rf-v" id="rfEvalMethod">Waiting for enough classes</span></div>
+    <div class="rf-row"><span class="rf-k">Output classes</span><span class="rf-v">Low / Moderate / High</span></div>
+    <div class="rf-row"><span class="rf-k">Fallback</span><span class="rf-v">Rule-based thresholds</span></div>
+    <div style="margin-top:.85rem;font-size:.6rem;font-weight:600;color:#334155;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem">Feature Importances</div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">rain_3h</span><span class="feat-p">62.9%</span></div><div class="feat-bg"><div class="feat-fill" style="width:62.9%"></div></div></div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">total_rain</span><span class="feat-p">33.4%</span></div><div class="feat-bg"><div class="feat-fill" style="width:33.4%"></div></div></div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">month</span><span class="feat-p">3.8%</span></div><div class="feat-bg"><div class="feat-fill" style="width:3.8%"></div></div></div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">water_level</span><span class="feat-p">0%</span></div><div class="feat-bg"><div class="feat-fill" style="width:0%"></div></div></div>
+    <div class="feat-bar-wrap"><div class="feat-hdr"><span class="feat-k">flow_rate</span><span class="feat-p">0%</span></div><div class="feat-bg"><div class="feat-fill" style="width:0%"></div></div></div>
+  </div>
+</div>
+
+<!-- ══ MAIN CONTENT ══ -->
+<div class="page">
+  <div class="page-title">Real-Time Flood Risk Dashboard — Mandaue City</div>
+
+  <!-- Bridge status cards -->
+  <div class="bridge-grid">
+    <!-- Bridge 1 -->
+    <div class="bridge-card low" id="card-bridge1">
+      <div class="bridge-name">Mandaue-Mactan Bridge 1</div>
+      <div class="risk-row">
+        <div class="risk-label risk-low" id="risk-bridge1">Low Risk</div>
+        <div class="risk-trend" id="trend-bridge1">Stable</div>
+      </div>
+      <div class="pill-row">
+        <div class="pill">1H <b id="pred1-bridge1">Low</b></div>
+        <div class="pill">3H <b id="pred3-bridge1">Low</b></div>
+        <div class="pill">Confidence <b id="conf-bridge1">0%</b></div>
+      </div>
+      <div class="sensor-grid">
+        <div class="sensor-item">
+          <div class="sensor-lbl">Rainfall</div>
+          <div class="sensor-val"><span id="rain-bridge1">0.00</span><span class="sensor-unit">mm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Water Level</div>
+          <div class="sensor-val"><span id="wl-bridge1">0.00</span><span class="sensor-unit">cm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Flow Rate</div>
+          <div class="sensor-val"><span id="flow-bridge1">0.00</span><span class="sensor-unit">L</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Rise Rate</div>
+          <div class="sensor-val"><span id="rise-bridge1">0.00</span><span class="sensor-unit">cm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Forecast 1H</div>
+          <div class="sensor-val"><span id="forecast1-bridge1">0.00</span><span class="sensor-unit">mm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Subside Time</div>
+          <div class="sensor-val"><span id="subside-bridge1">—</span></div>
+        </div>
+      </div>
+      <div class="card-footer" id="updated-bridge1">Updated: —<br>Last DB reading: —</div>
+    </div>
+
+    <!-- Bridge 2 -->
+    <div class="bridge-card low" id="card-bridge2">
+      <div class="bridge-name">Marcelo Fernan Bridge</div>
+      <div class="risk-row">
+        <div class="risk-label risk-low" id="risk-bridge2">Low Risk</div>
+        <div class="risk-trend" id="trend-bridge2">Stable</div>
+      </div>
+      <div class="pill-row">
+        <div class="pill">1H <b id="pred1-bridge2">Low</b></div>
+        <div class="pill">3H <b id="pred3-bridge2">Low</b></div>
+        <div class="pill">Confidence <b id="conf-bridge2">0%</b></div>
+      </div>
+      <div class="sensor-grid">
+        <div class="sensor-item">
+          <div class="sensor-lbl">Rainfall</div>
+          <div class="sensor-val"><span id="rain-bridge2">0.00</span><span class="sensor-unit">mm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Water Level</div>
+          <div class="sensor-val"><span id="wl-bridge2">0.00</span><span class="sensor-unit">cm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Flow Rate</div>
+          <div class="sensor-val"><span id="flow-bridge2">0.00</span><span class="sensor-unit">L</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Rise Rate</div>
+          <div class="sensor-val"><span id="rise-bridge2">0.00</span><span class="sensor-unit">cm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Forecast 1H</div>
+          <div class="sensor-val"><span id="forecast1-bridge2">0.00</span><span class="sensor-unit">mm</span></div>
+        </div>
+        <div class="sensor-item">
+          <div class="sensor-lbl">Subside Time</div>
+          <div class="sensor-val"><span id="subside-bridge2">—</span></div>
+        </div>
+      </div>
+      <div class="card-footer" id="updated-bridge2">Updated: —<br>Last DB reading: —</div>
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-lbl">Total Readings</div>
+      <div class="stat-val" id="stat-total">—</div>
+      <div class="stat-sub">in database</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">High Risk Events</div>
+      <div class="stat-val stat-high" id="stat-high">—</div>
+      <div class="stat-sub">flooded = 2</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Moderate Events</div>
+      <div class="stat-val stat-mod" id="stat-mod">—</div>
+      <div class="stat-sub">flooded = 1</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Avg Water Level</div>
+      <div class="stat-val stat-blue" id="stat-avgwl">—</div>
+      <div class="stat-sub">cm (bridge1)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-lbl">Max Rainfall</div>
+      <div class="stat-val" id="stat-maxrain">—</div>
+      <div class="stat-sub">mm (all time)</div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-title">Water Level — Last 20 Readings (Bridge 1)</div>
+      <div class="chart-wrap"><canvas id="chartWL1"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Rainfall — Last 20 Readings (Bridge 1)</div>
+      <div class="chart-wrap"><canvas id="chartRain1"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Water Level — Last 20 Readings (Bridge 2)</div>
+      <div class="chart-wrap"><canvas id="chartWL2"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Rainfall — Last 20 Readings (Bridge 2)</div>
+      <div class="chart-wrap"><canvas id="chartRain2"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Recent readings table -->
+  <div class="table-card">
+    <div class="table-title">Recent Readings</div>
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Device</th>
+            <th>Rainfall (mm)</th>
+            <th>Water Level (cm)</th>
+            <th>Flow Rate (L)</th>
+            <th>Risk</th>
+          </tr>
+        </thead>
+        <tbody id="recentTableBody">
+          <tr><td colspan="6" style="text-align:center;color:#334155;padding:1rem">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="table-card">
+    <div class="table-title">Training Mode</div>
+    <div style="font-size:.7rem;color:#64748b;margin-bottom:.85rem">Build a separate bootstrap dataset from historical sensor readings, then retrain the Random Forest from that dataset. This section measures how well the model matches the bootstrap training labels, not how later live readings turned out. Optional PAGASA CSV rows are added automatically if a file is available later.</div>
+    <div class="train-actions">
+      <button class="tbtn rfbtn" onclick="buildBootstrapDataset()">Build Bootstrap Dataset</button>
+      <button class="tbtn rfbtn" onclick="retrainModel()">Retrain Model</button>
+      <button class="tbtn" onclick="loadTrainingMode()">Refresh Training Status</button>
+    </div>
+    <div id="trainingModeContent">
+      <div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>
+    </div>
+  </div>
+
+  <div class="table-card">
+    <div class="section-head">
+      <div>
+        <div class="table-title" style="margin-bottom:.2rem">Actual vs Predicted</div>
+        <div class="section-copy" style="margin-bottom:0">Compare each saved 1-hour and 3-hour prediction against the later bridge reading that arrived after that forecast window.</div>
+      </div>
+      <div class="btn-row">
+        <button class="tbtn rfbtn" onclick="loadActualVsPredicted()">Refresh Comparison</button>
+      </div>
+    </div>
+    <div id="actualVsPredictedContent">
+      <div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── MODAL SYSTEM ──────────────────────────────────────────────────────────
+function openModal(id){document.getElementById(id).classList.add('open')}
+function closeModal(id){document.getElementById(id).classList.remove('open')}
+document.querySelectorAll('.modal-overlay').forEach(o=>{
+  o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open')})
+});
+
+// ── CHART INSTANCES ──────────────────────────────────────────────────────
+let charts={};
+
+Chart.defaults.color='#334155';
+Chart.defaults.borderColor='#1e293b';
+
+function buildChart(id,label,color){
+  const ctx=document.getElementById(id).getContext('2d');
+  charts[id]=new Chart(ctx,{
+    type:'line',
+    data:{
+      labels:[],
+      datasets:[{
+        label,data:[],
+        borderColor:color,
+        backgroundColor:color+'18',
+        tension:.35,fill:true,
+        pointBackgroundColor:color,
+        pointRadius:3,pointHoverRadius:5,
+        borderWidth:2
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:false},tooltip:{backgroundColor:'#0f172a',borderColor:'#1e293b',borderWidth:1,titleColor:'#e2e8f0',bodyColor:'#64748b'}},
+      scales:{
+        x:{ticks:{color:'#334155',font:{size:9},maxTicksLimit:8,maxRotation:30},grid:{color:'#1e293b'},border:{color:'transparent'}},
+        y:{ticks:{color:'#334155',font:{size:9}},grid:{color:'#1e293b'},border:{color:'transparent'}}
+      }
+    }
+  });
+}
+
+buildChart('chartWL1','Water Level (cm)','#38bdf8');
+buildChart('chartRain1','Rainfall (mm)','#818cf8');
+buildChart('chartWL2','Water Level (cm)','#06b6d4');
+buildChart('chartRain2','Rainfall (mm)','#a78bfa');
+
+function updateChart(id,labels,values){
+  const c=charts[id];
+  if(!c) return;
+  c.data.labels=labels;
+  c.data.datasets[0].data=values;
+  c.update('none');
+}
+
+// ── RISK HELPERS ─────────────────────────────────────────────────────────
+function getRiskLabel(wl,rain){
+  if(wl>150||rain>30) return{label:'High Risk',cls:'high'};
+  if(wl>80||rain>15)  return{label:'Moderate Risk',cls:'moderate'};
+  return{label:'Low Risk',cls:'low'};
+}
+
+function riskClassFromLabel(riskLabel){
+  if(riskLabel==='High') return 'high';
+  if(riskLabel==='Moderate') return 'moderate';
+  return 'low';
+}
+
+function setModelStatus(model){
+  const isMl = !!(model && model.ml_active);
+  const title = document.getElementById('rfModalTitle');
+  const sub = document.getElementById('rfModalSub');
+  const btn = document.getElementById('rfBtnTop');
+  if(isMl){
+    title.textContent='Random Forest Active';
+    title.style.color='#22c55e';
+    sub.textContent='ML model loaded and predicting live bridge risk';
+    btn.textContent='🌲 Random Forest';
+    btn.className='tbtn rfbtn';
+  } else {
+    title.textContent='Threshold Rules Active';
+    title.style.color='#f59e0b';
+    sub.textContent='Model fallback is active, using threshold rules';
+    btn.textContent='⚠️ Threshold Rules';
+    btn.className='tbtn thresh';
+  }
+}
+
+function setCard(bridgeId,rows,status){
+  const latest=(rows&&rows.length)?rows[rows.length-1]:{};
+  const wl=status?parseFloat(status.water_level||0):parseFloat(latest.water_level||0);
+  const rain=status?parseFloat(status.rainfall||0):parseFloat(latest.total_rain||0);
+  const flow=status?parseFloat(status.flow_rate||0):parseFloat(latest.flow_rate||0);
+  const rise=status?parseFloat(status.rise_rate||0):(rows&&rows.length>=2
+    ? (parseFloat(rows[rows.length-1].water_level||0)-parseFloat(rows[rows.length-2].water_level||0))
+    : 0);
+  const fallbackRisk=getRiskLabel(wl,rain);
+  const riskLabel=status&&status.current_risk?status.current_risk:fallbackRisk.label.replace(' Risk','');
+  const riskCls=riskClassFromLabel(riskLabel);
+  const card=document.getElementById('card-'+bridgeId);
+  const riskEl=document.getElementById('risk-'+bridgeId);
+  const trendEl=document.getElementById('trend-'+bridgeId);
+  card.className='bridge-card '+riskCls;
+  riskEl.className='risk-label risk-'+riskCls;
+  riskEl.textContent=riskLabel+' Risk';
+  trendEl.textContent=status&&status.trend_text?status.trend_text:'Stable';
+  trendEl.style.color=status&&status.trend_color?status.trend_color:'#94a3b8';
+  document.getElementById('pred1-'+bridgeId).textContent=status&&status.pred_risk_1h?status.pred_risk_1h:'-';
+  document.getElementById('pred3-'+bridgeId).textContent=status&&status.pred_risk_3h?status.pred_risk_3h:'-';
+  document.getElementById('conf-'+bridgeId).textContent=status?parseFloat(status.current_conf||status.confidence||0).toFixed(1)+'%':'-';
+  document.getElementById('rain-'+bridgeId).textContent=rain.toFixed(2);
+  document.getElementById('wl-'+bridgeId).textContent=wl.toFixed(2);
+  document.getElementById('flow-'+bridgeId).textContent=flow.toFixed(2);
+  document.getElementById('rise-'+bridgeId).textContent=rise.toFixed(2);
+  document.getElementById('forecast1-'+bridgeId).textContent=status?parseFloat(status.forecast_1h||0).toFixed(2):'0.00';
+  document.getElementById('subside-'+bridgeId).textContent=status&&status.subside_display?status.subside_display:'-';
+  const liveTs=status&&status.updated_at?fmtTs(status.updated_at):'—';
+  const dbTs=latest&&latest.timestamp?fmtTs(latest.timestamp):'—';
+  document.getElementById('updated-'+bridgeId).innerHTML='Updated: '+liveTs+'<br>Last DB reading: '+dbTs;
+}
+
+function fmtTs(iso){
+  if(!iso) return '—';
+  return new Date(iso).toLocaleString('en-PH',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+
+async function fetchJsonSafe(url, options){
+  const res = await fetch(url, options);
+  const text = await res.text();
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+
+  if(contentType.includes('application/json')){
+    try{
+      return JSON.parse(text);
+    }catch(e){
+      throw new Error('Server returned invalid JSON for ' + url + '.');
+    }
+  }
+
+  const shortText = (text || '').replace(/\s+/g,' ').trim().slice(0,160);
+  if(shortText.startsWith('<!DOCTYPE') || shortText.startsWith('<html') || shortText.startsWith('<')){
+    throw new Error('Server returned HTML instead of JSON. The Render backend may be outdated or crashing, so it needs a redeploy.');
+  }
+
+  throw new Error(shortText || ('Server returned ' + res.status + ' ' + res.statusText + '.'));
+}
+
+function trainingClassLine(classCounts){
+  return 'Low '+(classCounts[0]||0)+' • Moderate '+(classCounts[1]||0)+' • High '+(classCounts[2]||0);
+}
+
+function deviceDisplayName(deviceId){
+  if(deviceId === 'bridge1') return 'Bridge 1';
+  if(deviceId === 'bridge2') return 'Bridge 2';
+  return deviceId || 'Unknown';
+}
+
+function renderTrainingMode(data,message){
+  const content=document.getElementById('trainingModeContent');
+  if(data.error){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">'+data.error+'</div>';
+    return;
+  }
+  const classCounts=(data.class_counts||data.training_status?.class_counts||{});
+  const sources=data.sources||data.training_status?.sources||{};
+  const bootstrapRows=data.bootstrap_rows??data.training_status?.bootstrap_rows??0;
+  const modelLoaded=!!(data.model_loaded??data.training_status?.model_loaded);
+  const lastBuilt=data.last_built_at||data.training_status?.last_built_at;
+  const evaluation=data.evaluation||data.training_status?.evaluation||{};
+  const lastBuiltText=lastBuilt?fmtTs(lastBuilt):'—';
+  const statusTone=modelLoaded?'#22c55e':(bootstrapRows>0?'#f59e0b':'#64748b');
+  const statusText=modelLoaded?'Model ready for ML predictions':(bootstrapRows>0?'Bootstrap dataset ready, retraining still needed':'Bootstrap dataset has not been built yet');
+  const note=message?'<div class="train-note" style="margin-bottom:.85rem">'+message+'</div>':'';
+  const evalReady=!!evaluation.ready;
+  const evalAccuracy=evalReady?evaluation.accuracy+'%':'—';
+  const evalBalanced=evalReady?evaluation.balanced_accuracy+'%':'n/a';
+  const evalMethod=evalReady?(evaluation.evaluation_method||'Cross-validation'):(evaluation.reason||'Waiting for enough classes');
+  content.innerHTML=
+    note+
+    '<div class="accuracy-box">'+
+      '<div class="acc-pct" style="color:'+(evalReady?'#22c55e':statusTone)+'">'+(evalReady?evalAccuracy:bootstrapRows)+'</div>'+
+      '<div class="acc-lbl">'+(evalReady?'Bootstrap Model Accuracy':'Bootstrap Training Rows')+'</div>'+
+      '<div class="acc-sub">'+statusText+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Balanced accuracy: '+evalBalanced+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Class mix: '+trainingClassLine(classCounts)+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Optional PAGASA rows: '+(sources.pagasa_rows||0)+(sources.pagasa_enabled&&!sources.pagasa_rows?' (file not loaded yet)':'')+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Evaluation: '+evalMethod+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Last bootstrap build: '+lastBuiltText+'</div>'+
+    '</div>'+
+    '<div class="cg">'+
+      '<div class="cc"><div class="cn train-ok">'+(classCounts[0]||0)+'</div><div class="cl">Low training rows</div></div>'+
+      '<div class="cc"><div class="cn train-warn">'+(classCounts[1]||0)+'</div><div class="cl">Moderate training rows</div></div>'+
+      '<div class="cc"><div class="cn" style="color:#ef4444">'+(classCounts[2]||0)+'</div><div class="cl">High training rows</div></div>'+
+    '</div>'+
+    '<div class="train-note train-status">Source rows: Bootstrap '+bootstrapRows+', PAGASA '+(sources.pagasa_rows||0)+'. Build the bootstrap dataset first, then retrain the model whenever new readings are added.</div>';
+
+  const rfTrainSamples=document.getElementById('rfTrainSamples');
+  const rfEvalAccuracy=document.getElementById('rfEvalAccuracy');
+  const rfEvalMethod=document.getElementById('rfEvalMethod');
+  if(rfTrainSamples) rfTrainSamples.textContent='Bootstrap ' + bootstrapRows + ' rows, PAGASA ' + (sources.pagasa_rows||0) + ' rows';
+  if(rfEvalAccuracy){
+    rfEvalAccuracy.textContent=evalReady?evalAccuracy:'Not ready';
+    rfEvalAccuracy.style.color=evalReady?'#22c55e':'#64748b';
+  }
+  if(rfEvalMethod) rfEvalMethod.textContent=evalMethod;
+}
+
+async function loadTrainingMode(){
+  const content=document.getElementById('trainingModeContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>';
+  try{
+    const data=await fetchJsonSafe('/api/dashboard-data?include_training=1');
+    renderTrainingMode(data.training_status || data);
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
+async function buildBootstrapDataset(){
+  const content=document.getElementById('trainingModeContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Building bootstrap dataset...</div>';
+  try{
+    const data=await fetchJsonSafe('/api/bootstrap-dataset',{method:'POST'});
+    if(data.status!=='success'){
+      content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">'+(data.message||'Bootstrap build failed.')+'</div>';
+      return;
+    }
+    renderTrainingMode(data.training_status,data.message);
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
+async function retrainModel(){
+  const content=document.getElementById('trainingModeContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Retraining model...</div>';
+  try{
+    const data=await fetchJsonSafe('/retrain',{method:'POST'});
+    if(data.status==='success'){
+      await loadDashboard();
+      await loadTrainingMode();
+      renderTrainingMode({
+        ...(await fetchJsonSafe('/api/training-mode-status'))
+      },data.message);
+      return;
+    }
+    renderTrainingMode(await fetchJsonSafe('/api/training-mode-status'),data.message||data.reason||'Retraining skipped.');
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
+function renderActualVsPredicted(data){
+  const content=document.getElementById('actualVsPredictedContent');
+  if(!content) return;
+
+  const rows=Array.isArray(data.rows)?data.rows:[];
+  const horizon1=data.horizons&&data.horizons['1h']?data.horizons['1h']:{};
+  const horizon3=data.horizons&&data.horizons['3h']?data.horizons['3h']:{};
+  const classCounts=data.class_counts||{};
+  const predictionCounts=data.prediction_counts||{};
+  const correctByClass=data.correct_by_class||{};
+  const wrongByClass=data.wrong_by_class||{};
+  const accuracy=data.accuracy!=null?data.accuracy:'—';
+  const balanced=data.balanced_accuracy!=null?data.balanced_accuracy:'n/a';
+  const correct=Number(data.correct||0);
+  const total=Number(data.total||0);
+  const noteText=data.message||data.error||'Comparison ready.';
+  const noteTone=(data.setup_required||data.error)?' warn':'';
+  const method=data.evaluation_method||'No evaluation method available.';
+
+  let html=
+    '<div class="comparison-hero">'+
+      '<div class="big">'+accuracy+(accuracy!=='—'?'%':'')+'</div>'+
+      '<div class="sub">Prediction Accuracy vs Later Actual Readings</div>'+
+      '<div class="meta">'+correct+' matching scored rows out of '+total+'</div>'+
+      '<div class="meta">Evaluation: '+method+'</div>'+
+      '<div class="meta">Balanced accuracy: '+balanced+(balanced!=='n/a'?'%':'')+'</div>'+
+      '<div class="meta">Actual class counts: Low '+(classCounts[0]||0)+', Moderate '+(classCounts[1]||0)+', High '+(classCounts[2]||0)+'</div>'+
+      '<div class="meta">Predicted mix: Low '+(predictionCounts[0]||0)+', Moderate '+(predictionCounts[1]||0)+', High '+(predictionCounts[2]||0)+'</div>'+
+      '<div class="meta">1H: '+(horizon1.accuracy!=null?horizon1.accuracy+'%':'—')+' ('+(horizon1.correct||0)+'/'+(horizon1.total||0)+') • 3H: '+(horizon3.accuracy!=null?horizon3.accuracy+'%':'—')+' ('+(horizon3.correct||0)+'/'+(horizon3.total||0)+')</div>'+
+    '</div>'+
+    '<div class="comparison-note'+noteTone+'">'+
+      noteText+'<br>'+
+      'Pending comparisons: 1 hour '+(horizon1.pending||0)+' • 3 hours '+(horizon3.pending||0)+
+    '</div>';
+
+  if(rows.length===0){
+    html += '<div style="text-align:center;color:#334155;padding:1rem">No comparison rows available yet.</div>';
+    content.innerHTML=html;
+    return;
+  }
+
+  html +=
+    '<div class="comparison-block-title">Correct Predictions</div>'+
+    '<div class="comparison-grid">'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#22c55e">'+(correctByClass.low_correct||0)+'</div><div class="comparison-label">Low ✓</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#f59e0b">'+(correctByClass.mod_correct||0)+'</div><div class="comparison-label">Moderate ✓</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#ef4444">'+(correctByClass.high_correct||0)+'</div><div class="comparison-label">High ✓</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#38bdf8">'+correct+'</div><div class="comparison-label">Total ✓</div></div>'+
+    '</div>'+
+    '<div class="comparison-block-title">Misclassifications</div>'+
+    '<div class="comparison-grid">'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.low_wrong||0)+'</div><div class="comparison-label">Low wrong</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.mod_wrong||0)+'</div><div class="comparison-label">Moderate wrong</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.high_wrong||0)+'</div><div class="comparison-label">High wrong</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+Math.max(total-correct,0)+'</div><div class="comparison-label">Total wrong</div></div>'+
+    '</div>'+
+    '<div class="comparison-block-title">Last 30 Scored Rows</div>'+
+    '<div style="overflow-x:auto">'+
+      '<table class="data-table">'+
+        '<thead><tr><th>Time</th><th>Device</th><th>Horizon</th><th>Actual</th><th>Predicted</th><th>Conf</th><th>✓</th></tr></thead>'+
+        '<tbody>'+
+          rows.map(row=>
+            '<tr>'+
+              '<td>'+fmtTs(row.prediction_time)+'</td>'+
+              '<td style="color:#64748b">'+deviceDisplayName(row.device_id)+'</td>'+
+              '<td>'+(row.horizon||'').toUpperCase()+'</td>'+
+              '<td style="color:'+(row.actual==='Low'?'#22c55e':(row.actual==='Moderate'?'#f59e0b':'#ef4444'))+'">'+row.actual+'</td>'+
+              '<td style="color:'+(row.predicted==='Low'?'#22c55e':(row.predicted==='Moderate'?'#f59e0b':'#ef4444'))+'">'+row.predicted+'</td>'+
+              '<td>'+parseFloat(row.confidence||0).toFixed(1)+'%</td>'+
+              '<td>'+(row.match?'<span class="match-yes">V</span>':'<span class="match-no">X</span>')+'</td>'+
+            '</tr>'
+          ).join('')+
+        '</tbody>'+
+      '</table>'+
+    '</div>';
+
+  content.innerHTML=html;
+}
+
+async function loadActualVsPredicted(){
+  const content=document.getElementById('actualVsPredictedContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>';
+  try{
+    const dashboardData = await fetchJsonSafe('/api/dashboard-data?include_comparison=1');
+    if(dashboardData && dashboardData.actual_vs_predicted){
+      renderActualVsPredicted(dashboardData.actual_vs_predicted);
+      return;
+    }
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: Comparison data was not included in the dashboard response.</div>';
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
+// ── LOAD DASHBOARD DATA ───────────────────────────────────────────────────
+async function loadDashboard(){
+  try{
+    const res=await fetch('/api/dashboard-data?include_training=1&include_comparison=1');
+    const data=await res.json();
+    if(data.error){console.error('Dashboard error:',data.error);return;}
+
+    // Bridge cards
+    const live=data.bridges||{};
+    setCard('bridge1',data.bridge1||[],live.bridge1||null);
+    setCard('bridge2',data.bridge2||[],live.bridge2||null);
+    setModelStatus(data.model||{});
+
+    // Stats
+    const s=data.stats||{};
+    document.getElementById('stat-total').textContent=s.total?Math.round(s.total).toLocaleString():'0';
+    document.getElementById('stat-high').textContent=s.high?Math.round(s.high):'0';
+    document.getElementById('stat-mod').textContent=s.moderate?Math.round(s.moderate):'0';
+    document.getElementById('stat-avgwl').textContent=s.avg_water_level?parseFloat(s.avg_water_level).toFixed(1):'0';
+    document.getElementById('stat-maxrain').textContent=s.max_rain?parseFloat(s.max_rain).toFixed(1):'0';
+
+    // Charts — last 20 readings each bridge
+    const b1=data.bridge1||[];
+    const b2=data.bridge2||[];
+    const last20=(arr)=>arr.slice(-20);
+    const mkLabels=(arr)=>arr.map(r=>fmtTs(r.timestamp));
+
+    const b1_20=last20(b1),b2_20=last20(b2);
+    updateChart('chartWL1',mkLabels(b1_20),b1_20.map(r=>parseFloat(r.water_level||0)));
+    updateChart('chartRain1',mkLabels(b1_20),b1_20.map(r=>parseFloat(r.total_rain||0)));
+    updateChart('chartWL2',mkLabels(b2_20),b2_20.map(r=>parseFloat(r.water_level||0)));
+    updateChart('chartRain2',mkLabels(b2_20),b2_20.map(r=>parseFloat(r.total_rain||0)));
+
+    // Recent table
+    const recent=data.recent||[];
+    const tbody=document.getElementById('recentTableBody');
+    if(recent.length===0){
+      tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:#334155;padding:1rem">No readings yet.</td></tr>';
+    } else {
+      tbody.innerHTML=recent.map(r=>{
+        const wl=parseFloat(r.water_level||0),rain=parseFloat(r.total_rain||0);
+        const risk=getRiskLabel(wl,rain);
+        const dev=r.device_id==='bridge2'?'Bridge 2':'Bridge 1';
+        return '<tr><td>'+fmtTs(r.timestamp)+'</td><td style="color:#64748b">'+dev+'</td><td>'+rain.toFixed(2)+'</td><td>'+wl.toFixed(2)+'</td><td>'+parseFloat(r.flow_rate||0).toFixed(2)+'</td><td><span class="rbadge rb-'+risk.cls+'">'+risk.label+'</span></td></tr>';
+      }).join('');
+    }
+
+    if(data.training_status){
+      renderTrainingMode(data.training_status);
+    }
+    if(data.actual_vs_predicted){
+      renderActualVsPredicted(data.actual_vs_predicted);
+    }
+  } catch(e){
+    console.error('loadDashboard failed:',e);
+  }
+}
+
+loadDashboard();
+setInterval(loadDashboard,30000);
+</script>
+</body>
+</html>
