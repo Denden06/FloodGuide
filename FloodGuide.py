@@ -7,8 +7,42 @@ import joblib
 import os
 import threading
 import time
+from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
+
+
+def api_error_response(message, status_code=500, error_type="error"):
+    return jsonify({
+        "status": "error",
+        "error": message,
+        "type": error_type,
+        "status_code": status_code,
+    }), status_code
+
+
+@app.errorhandler(404)
+def handle_404(error):
+    if request.path.startswith("/api/"):
+        return api_error_response(f"API route not found: {request.path}", 404, "not_found")
+    return error
+
+
+@app.errorhandler(500)
+def handle_500(error):
+    if request.path.startswith("/api/"):
+        return api_error_response("Internal server error while serving API request.", 500, "server_error")
+    return error
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    if request.path.startswith("/api/"):
+        if isinstance(error, HTTPException):
+            return api_error_response(error.description, error.code or 500, "http_error")
+        print(f"❌ Unhandled API error on {request.path}: {error}")
+        return api_error_response(str(error), 500, "unhandled_exception")
+    raise error
 
 # =========================================
 # DATABASE CONNECTION (Clever Cloud)
