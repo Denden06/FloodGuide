@@ -772,7 +772,16 @@ async function loadActualVsPredicted(){
     const data=await fetchJsonSafe('/api/actual-vs-predicted');
     renderActualVsPredicted(data);
   }catch(e){
-    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+    try{
+      const dashboardData = await fetchJsonSafe('/api/dashboard-data?include_comparison=1');
+      if(dashboardData && dashboardData.actual_vs_predicted){
+        renderActualVsPredicted(dashboardData.actual_vs_predicted);
+        return;
+      }
+      content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+    }catch(fallbackError){
+      content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+fallbackError.message+'</div>';
+    }
   }
 }
 
