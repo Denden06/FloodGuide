@@ -411,7 +411,7 @@
     <div class="train-actions">
       <button class="tbtn rfbtn" onclick="buildBootstrapDataset()">Build Bootstrap Dataset</button>
       <button class="tbtn rfbtn" onclick="retrainModel()">Retrain Model</button>
-      <button class="tbtn" onclick="loadTrainingMode()">Refresh Training Status</button>
+      <button class="tbtn" onclick="refreshTrainingMode()">Refresh Training Status</button>
     </div>
     <div id="trainingModeContent">
       <div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>
@@ -425,7 +425,7 @@
         <div class="section-copy" style="margin-bottom:0">Compare each saved 1-hour and 3-hour prediction against the later bridge reading that arrived after that forecast window.</div>
       </div>
       <div class="btn-row">
-        <button class="tbtn rfbtn" onclick="loadActualVsPredicted()">Refresh Comparison</button>
+        <button class="tbtn rfbtn" onclick="refreshActualVsPredicted()">Refresh Comparison</button>
       </div>
     </div>
     <div id="actualVsPredictedContent">
@@ -652,6 +652,17 @@ async function loadTrainingMode(){
   }
 }
 
+async function refreshTrainingMode(){
+  const content=document.getElementById('trainingModeContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Refreshing training status...</div>';
+  try{
+    const data=await fetchJsonSafe('/api/training-mode-status?refresh=1');
+    renderTrainingMode(data);
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
 async function buildBootstrapDataset(){
   const content=document.getElementById('trainingModeContent');
   content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Building bootstrap dataset...</div>';
@@ -780,11 +791,21 @@ async function loadActualVsPredicted(){
   }
 }
 
+async function refreshActualVsPredicted(){
+  const content=document.getElementById('actualVsPredictedContent');
+  content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Refreshing comparison...</div>';
+  try{
+    const data=await fetchJsonSafe('/api/actual-vs-predicted?refresh=1');
+    renderActualVsPredicted(data);
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+  }
+}
+
 // ── LOAD DASHBOARD DATA ───────────────────────────────────────────────────
 async function loadDashboard(){
   try{
-    const res=await fetch('/api/dashboard-data?include_training=1&include_comparison=1');
-    const data=await res.json();
+    const data=await fetchJsonSafe('/api/dashboard-data');
     if(data.error){console.error('Dashboard error:',data.error);return;}
 
     // Bridge cards
@@ -827,18 +848,14 @@ async function loadDashboard(){
       }).join('');
     }
 
-    if(data.training_status){
-      renderTrainingMode(data.training_status);
-    }
-    if(data.actual_vs_predicted){
-      renderActualVsPredicted(data.actual_vs_predicted);
-    }
   } catch(e){
     console.error('loadDashboard failed:',e);
   }
 }
 
 loadDashboard();
+loadTrainingMode();
+loadActualVsPredicted();
 setInterval(loadDashboard,30000);
 </script>
 </body>
