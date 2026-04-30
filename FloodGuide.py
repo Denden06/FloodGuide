@@ -94,6 +94,10 @@ latest_sensor_data = {
 
 SIMULATION_BRIDGE_IDS = ("bridge1", "bridge2")
 prediction_audit_table_ready = False
+TRAINING_STATUS_CACHE_TTL = 300
+ACTUAL_VS_PREDICTED_CACHE_TTL = 300
+training_status_cache = {"value": None, "expires_at": 0}
+actual_vs_predicted_cache = {"value": None, "expires_at": 0}
 
 MONITORED_SITES = [
     {"id": "bridge1", "name": "Mandaue-Mactan Bridge 1", "lat": 10.326490, "lng": 123.952142},
@@ -114,6 +118,38 @@ def keep_alive():
                 print("✅ Keep-alive ping sent")
             except Exception as e:
                 print(f"⚠️ Keep-alive ping failed: {e}")
+
+
+def invalidate_training_status_cache():
+    training_status_cache["value"] = None
+    training_status_cache["expires_at"] = 0
+
+
+def invalidate_actual_vs_predicted_cache():
+    actual_vs_predicted_cache["value"] = None
+    actual_vs_predicted_cache["expires_at"] = 0
+
+
+def get_cached_training_mode_status(force=False):
+    now = time.time()
+    if (not force and training_status_cache["value"] is not None
+            and training_status_cache["expires_at"] > now):
+        return training_status_cache["value"]
+    value = get_training_mode_status()
+    training_status_cache["value"] = value
+    training_status_cache["expires_at"] = now + TRAINING_STATUS_CACHE_TTL
+    return value
+
+
+def get_cached_actual_vs_predicted(force=False):
+    now = time.time()
+    if (not force and actual_vs_predicted_cache["value"] is not None
+            and actual_vs_predicted_cache["expires_at"] > now):
+        return actual_vs_predicted_cache["value"]
+    value = compute_actual_vs_predicted_payload()
+    actual_vs_predicted_cache["value"] = value
+    actual_vs_predicted_cache["expires_at"] = now + ACTUAL_VS_PREDICTED_CACHE_TTL
+    return value
 
 @app.route("/ping")
 def ping():
@@ -1371,6 +1407,8 @@ def retrain():
         )
         clf.fit(X, y)
         joblib.dump(clf, MODEL_PATH)
+        invalidate_training_status_cache()
+        invalidate_actual_vs_predicted_cache()
 
         msg = f"✅ Retrained on {len(df)} training rows — class counts: {class_counts}"
         print(msg)
@@ -1391,7 +1429,9 @@ def retrain():
 def bootstrap_dataset():
     try:
         result = rebuild_bootstrap_dataset()
-        status = get_training_mode_status()
+        invalidate_training_status_cache()
+        invalidate_actual_vs_predicted_cache()
+        status = get_cached_training_mode_status(force=True)
         return jsonify({
             "status": "success",
             "message": result["message"],
@@ -1407,7 +1447,8 @@ def bootstrap_dataset():
 @app.route("/api/training-mode-status")
 def training_mode_status():
     try:
-        return jsonify(get_training_mode_status())
+        force = request.args.get("refresh") == "1"
+        return jsonify(get_cached_training_mode_status(force=force))
     except Exception as e:
         print(f"❌ Training status error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -1434,6 +1475,7 @@ def receive_sensor():
     latest_sensor_data[device_id]["flow_rate"]   = flow_rate
 
     insert_sensor_reading(device_id, rainfall, water_level, flow_rate)
+    invalidate_actual_vs_predicted_cache()
 
     return jsonify({"status": "received", "device": device_id})
 
@@ -1669,13 +1711,13 @@ def dashboard_data():
         }
         if request.args.get("include_training") == "1":
             try:
-                payload["training_status"] = get_training_mode_status()
+                payload["training_status"] = get_cached_training_mode_status()
             except Exception as training_error:
                 print(f"❌ Dashboard embedded training status error: {training_error}")
                 payload["training_status"] = {"error": str(training_error)}
         if request.args.get("include_comparison") == "1":
             try:
-                payload["actual_vs_predicted"] = compute_actual_vs_predicted_payload()
+                payload["actual_vs_predicted"] = get_cached_actual_vs_predicted()
             except Exception as comparison_error:
                 print(f"❌ Dashboard embedded actual-vs-predicted error: {comparison_error}")
                 payload["actual_vs_predicted"] = {
@@ -1941,7 +1983,8 @@ def replay_event():
 @app.route("/api/actual-vs-predicted")
 def actual_vs_predicted():
     try:
-        return jsonify(compute_actual_vs_predicted_payload()), 200
+        force = request.args.get("refresh") == "1"
+        return jsonify(get_cached_actual_vs_predicted(force=force)), 200
     except Exception as e:
         print(f"❌ Actual vs Predicted error: {e}")
         return jsonify({
