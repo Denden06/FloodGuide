@@ -645,8 +645,8 @@ async function loadTrainingMode(){
   const content=document.getElementById('trainingModeContent');
   content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>';
   try{
-    const data=await fetchJsonSafe('/api/training-mode-status');
-    renderTrainingMode(data);
+    const data=await fetchJsonSafe('/api/dashboard-data?include_training=1');
+    renderTrainingMode(data.training_status || data);
   }catch(e){
     content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
   }
@@ -769,26 +769,21 @@ async function loadActualVsPredicted(){
   const content=document.getElementById('actualVsPredictedContent');
   content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>';
   try{
-    const data=await fetchJsonSafe('/api/actual-vs-predicted');
-    renderActualVsPredicted(data);
-  }catch(e){
-    try{
-      const dashboardData = await fetchJsonSafe('/api/dashboard-data?include_comparison=1');
-      if(dashboardData && dashboardData.actual_vs_predicted){
-        renderActualVsPredicted(dashboardData.actual_vs_predicted);
-        return;
-      }
-      content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
-    }catch(fallbackError){
-      content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+fallbackError.message+'</div>';
+    const dashboardData = await fetchJsonSafe('/api/dashboard-data?include_comparison=1');
+    if(dashboardData && dashboardData.actual_vs_predicted){
+      renderActualVsPredicted(dashboardData.actual_vs_predicted);
+      return;
     }
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: Comparison data was not included in the dashboard response.</div>';
+  }catch(e){
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
   }
 }
 
 // ── LOAD DASHBOARD DATA ───────────────────────────────────────────────────
 async function loadDashboard(){
   try{
-    const res=await fetch('/api/dashboard-data');
+    const res=await fetch('/api/dashboard-data?include_training=1&include_comparison=1');
     const data=await res.json();
     if(data.error){console.error('Dashboard error:',data.error);return;}
 
@@ -832,16 +827,18 @@ async function loadDashboard(){
       }).join('');
     }
 
-    // Update RF modal badge on dashboard based on loaded data
-    // (just keep it as active since we loaded successfully)
+    if(data.training_status){
+      renderTrainingMode(data.training_status);
+    }
+    if(data.actual_vs_predicted){
+      renderActualVsPredicted(data.actual_vs_predicted);
+    }
   } catch(e){
     console.error('loadDashboard failed:',e);
   }
 }
 
 loadDashboard();
-loadTrainingMode();
-loadActualVsPredicted();
 setInterval(loadDashboard,30000);
 </script>
 </body>
