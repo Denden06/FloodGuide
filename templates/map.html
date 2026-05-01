@@ -107,7 +107,7 @@
 
 <div class="side-panel" id="routePanel">
   <div class="panel-header"><div class="panel-title">Safe Route Planner</div><span class="panel-close" onclick="closePanel('routePanel')">X</span></div>
-  <p class="intro-txt">This planner now uses your exact custom start and end points for Bridge 1, Bridge 2, and the CCLEX fallback, then sends users straight to Google Maps for turn-by-turn directions.</p>
+  <p class="intro-txt">Choose whether route links should open from your live GPS location or from the fixed route starting points. Bridge 1 and Bridge 2 stay as the main recommendations unless both bridges are flooded.</p>
   <div class="sel-lbl">Travel Direction</div>
   <select id="routeDirection" class="fsel" onchange="updateRoutePlannerCopy(); if(currentRecommendation){planRoute();}">
     <option value="mandaue_to_lapu">Mandaue to Lapu-Lapu</option>
@@ -115,8 +115,11 @@
   </select>
   <div class="infobox" id="routeLogicNote" style="margin-bottom:.7rem"></div>
   <button class="act-btn btn-blue" onclick="planRoute()">Show Recommended Route</button>
+  <button class="act-btn btn-grey" onclick="requestCurrentLocation(true)">Use My Current Location</button>
+  <button class="act-btn btn-grey" onclick="useFixedRouteStart()">Use Fixed Starting Point</button>
   <button class="act-btn btn-grey" onclick="clearRoutes()">Clear Routes</button>
-  <div class="infobox" id="routeEngineNote">Route handoff: Google Maps directions links use your configured addresses, plus codes, and bridge waypoints.</div>
+  <div class="infobox" id="routeEngineNote">Route handoff: Google Maps directions links use either your chosen live GPS origin or the configured route starting point, then continue through the selected route waypoints and destination.</div>
+  <div class="infobox" id="routeGpsNote" style="margin-top:.55rem">GPS mode: fixed route starting points.</div>
   <div id="routeResults"><div class="route-empty">Tap Show Recommended Route to apply the live bridge routing logic.</div></div>
 </div>
 
@@ -192,12 +195,12 @@ const ROUTE_ENDPOINTS = {
   bridge1_mandaue_start:{
     label:'Shell, A. C. Cortes Ave, Cambaro',
     address:'Shell, A. C. Cortes Ave, Cambaro, Mandaue City, Cebu',
-    query:'Shell, A. C. Cortes Ave, Cambaro, Mandaue City, Cebu'
+    query:'8XH2+58 Mandaue, Cebu'
   },
   bridge1_lapu_end:{
     label:'Nagali Building II, Lapu-Lapu',
     address:'Nagali Building II, Lapu-Lapu City, Cebu',
-    query:'Nagali Building II, Lapu-Lapu City, Cebu'
+    query:'Nagali Building II, Lapu-Lapu City, Cebu, Philippines'
   },
   bridge1_lapu_return_start:{
     label:'Pajo terminal habal habal station',
@@ -222,12 +225,12 @@ const ROUTE_ENDPOINTS = {
   bridge2_mandaue_start:{
     label:'Wilcon Depot, U.N. Ave, Umapad',
     address:'Wilcon Depot, U.N. Ave, Barangay Umapad, Mandaue City, Cebu',
-    query:'Wilcon Depot, U.N. Ave, Barangay Umapad, Mandaue City, Cebu'
+    query:'8XP5+4W Mandaue, Cebu'
   },
   bridge2_lapu_end:{
     label:'Shell, M.L. Quezon National Highway',
     address:'Shell, M.L. Quezon National Highway, Lapu-Lapu City, Cebu',
-    query:'Shell, M.L. Quezon National Highway, Lapu-Lapu City, Cebu'
+    query:'8XFF+F5 Lapu-Lapu, Cebu'
   },
   bridge2_lapu_return_start:{
     label:'Starbucks Shell Pusok Cebu',
@@ -247,22 +250,22 @@ const ROUTE_ENDPOINTS = {
   mybus_sm_seaside:{
     label:'MyBus SM Seaside Terminal',
     address:'7VJJ+QP Cebu City, Cebu',
-    query:'MyBus SM Seaside Terminal, 7VJJ+QP Cebu City, Cebu'
+    query:'7VJJ+QP Cebu City, Cebu'
   },
   lactodco:{
     label:'LACTODCO, Purok five star',
     address:'LACTODCO, Purok five star, Lapu-Lapu City, Cebu',
-    query:'LACTODCO, Purok five star, Lapu-Lapu City, Cebu'
+    query:'7WFW+M8 Lapu-Lapu, Cebu'
   },
   cclex_ramp:{
     label:'Cebu South Coastal Rd & F. Vestil St',
     address:'Cebu South Coastal Rd & F. Vestil St, Cebu City, Cebu',
-    query:'Cebu South Coastal Rd & F. Vestil St, Cebu City, Cebu'
+    query:'F. Vestil St & Cebu South Coastal Rd, Mambaling, Cebu City, 6000 Cebu'
   },
   cclex_waypoint:{
     label:'Cebu-Cordova Link Expy',
     address:'Cebu-Cordova Link Expy, Cebu City, Cebu',
-    query:'Cebu-Cordova Link Expy, Cebu City, Cebu'
+    query:'Cebu-Cordova Link Expy, Cebu City, Cebu, Philippines'
   }
 };
 
@@ -314,7 +317,7 @@ const ROUTE_TEMPLATES = {
       ROUTE_ENDPOINTS.cclex_ramp,
       ROUTE_ENDPOINTS.cclex_waypoint
     ],
-    destination: ROUTE_ENDPOINTS.lactodco
+    destination: ROUTE_ENDPOINTS.bridge1_lapu_end
   },
   cclex_mandaue_to_lapu_bridge2:{
     id:'cclex_mandaue_to_lapu_bridge2',
@@ -327,7 +330,7 @@ const ROUTE_TEMPLATES = {
       ROUTE_ENDPOINTS.cclex_ramp,
       ROUTE_ENDPOINTS.cclex_waypoint
     ],
-    destination: ROUTE_ENDPOINTS.lactodco
+    destination: ROUTE_ENDPOINTS.bridge2_lapu_end
   },
   cclex_lapu_to_mandaue_bridge1:{
     id:'cclex_lapu_to_mandaue_bridge1',
@@ -415,6 +418,8 @@ let activeRoutes = [];
 let routeMarkers = [];
 let currentRecommendation = null;
 let currentSelectedRouteId = null;
+let currentGpsOrigin = null;
+let routeOriginMode = 'fixed';
 
 function rememberRoute(type, ref){
   activeRoutes.push({type, ref});
@@ -470,8 +475,59 @@ function stopQuery(stop){
   return '';
 }
 
-function buildGoogleMapsDirectionsUrl(route){
-  const origin = stopQuery(route.origin);
+function updateGpsNote(text){
+  const el = document.getElementById('routeGpsNote');
+  if(el) el.textContent = text;
+}
+
+function useFixedRouteStart(){
+  routeOriginMode = 'fixed';
+  updateGpsNote('GPS mode: fixed route starting points.');
+  if(currentRecommendation){
+    renderRouteResults();
+  }
+}
+
+function requestCurrentLocation(force=false){
+  if(currentGpsOrigin && !force){
+    routeOriginMode = 'gps';
+    updateGpsNote('GPS mode: live current location is active for route links.');
+    return Promise.resolve(currentGpsOrigin);
+  }
+  if(!navigator.geolocation){
+    routeOriginMode = 'fixed';
+    updateGpsNote('GPS mode: browser location is not available, so fixed route starting points will be used.');
+    return Promise.resolve(null);
+  }
+  updateGpsNote('GPS mode: requesting live current location...');
+  return new Promise(resolve=>{
+    navigator.geolocation.getCurrentPosition(
+      pos=>{
+        routeOriginMode = 'gps';
+        currentGpsOrigin = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          label: 'Your current location'
+        };
+        updateGpsNote('GPS mode: live current location is active for route links.');
+        if(currentRecommendation){
+          renderRouteResults();
+        }
+        resolve(currentGpsOrigin);
+      },
+      err=>{
+        console.warn('GPS location error:', err);
+        routeOriginMode = 'fixed';
+        updateGpsNote('GPS mode: permission denied or unavailable, so fixed route starting points will be used.');
+        resolve(null);
+      },
+      {enableHighAccuracy:true, timeout:10000, maximumAge:120000}
+    );
+  });
+}
+
+function buildGoogleMapsDirectionsUrl(route, gpsOrigin=null){
+  const origin = gpsOrigin ? `${gpsOrigin.lat},${gpsOrigin.lng}` : stopQuery(route.origin);
   const destination = stopQuery(route.destination);
   const waypoints = (route.waypoints || []).map(stop=>stopQuery(stop)).filter(Boolean).join('|');
   let url = 'https://www.google.com/maps/dir/?api=1&travelmode=driving';
@@ -483,13 +539,14 @@ function buildGoogleMapsDirectionsUrl(route){
   return url;
 }
 
-function openRouteInGoogleMaps(routeId){
+async function openRouteInGoogleMaps(routeId){
   if(!currentRecommendation) return;
   const route = (currentRecommendation.available || []).find(r=>r.id === routeId);
   if(!route) return;
   currentSelectedRouteId = routeId;
   renderRouteResults();
-  const url = buildGoogleMapsDirectionsUrl(route);
+  const gpsOrigin = routeOriginMode === 'gps' ? await requestCurrentLocation(false) : null;
+  const url = buildGoogleMapsDirectionsUrl(route, gpsOrigin);
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
@@ -714,7 +771,7 @@ function buildRouteRecommendation(){
       return {
         available: [cclexBridge1, cclexBridge2, bridge1Route, bridge2Route],
         defaultRouteId: 'cclex_mandaue_to_lapu_bridge1',
-      headline: 'Both bridges show flooding. Use the CCLEX emergency route through MyBus SM Seaside Terminal to reach LACTODCO in Lapu-Lapu.'
+      headline: 'Both bridges show flooding. Use the CCLEX emergency route through MyBus SM Seaside Terminal, then continue to the selected Lapu-Lapu destination.'
       };
     }
 
@@ -757,7 +814,10 @@ function renderRouteResults(){
     const badge = isFlooded ? 'AVOID - FLOODED' : (isRecommended ? 'RECOMMENDED' : 'AVAILABLE');
     const badgeClass = isFlooded ? 'rs-avoid' : (isRecommended ? 'rs-safe' : 'rs-caut');
     const cardTone = isFlooded ? 'danger' : (isRecommended ? 'info' : 'warn');
-    html += '<div class="route-card ' + (isActive ? 'active ' : '') + cardTone + '" id="route-card-' + route.id + '"><div class="route-rank">' + (isRecommended ? 'Top Recommendation' : 'Option ' + (index + 1)) + '</div><div class="route-name" style="color:' + route.color + '">' + route.name + '</div><div class="route-desc" id="route-desc-' + route.id + '">' + route.origin.label + ' to ' + route.destination.label + (isFlooded ? ' • Bridge is flooded, avoid unless absolutely necessary.' : ' • Opens directly in Google Maps.') + '</div><div class="route-actions"><button class="route-open" onclick="openRouteInGoogleMaps(\'' + route.id + '\')">' + (isActive ? 'Open Again in Google Maps' : 'Open in Google Maps') + '</button><span class="rs ' + badgeClass + '">' + badge + '</span></div></div>';
+    const originModeText = routeOriginMode === 'gps'
+      ? 'Current location to ' + route.destination.label
+      : route.origin.label + ' to ' + route.destination.label;
+    html += '<div class="route-card ' + (isActive ? 'active ' : '') + cardTone + '" id="route-card-' + route.id + '"><div class="route-rank">' + (isRecommended ? 'Top Recommendation' : 'Option ' + (index + 1)) + '</div><div class="route-name" style="color:' + route.color + '">' + route.name + '</div><div class="route-desc" id="route-desc-' + route.id + '">' + originModeText + (isFlooded ? ' • Bridge is flooded, avoid unless absolutely necessary.' : ' • Opens directly in Google Maps.') + '</div><div class="route-actions"><button class="route-open" onclick="openRouteInGoogleMaps(\'' + route.id + '\')">' + (isActive ? 'Open Again in Google Maps' : 'Open in Google Maps') + '</button><span class="rs ' + badgeClass + '">' + badge + '</span></div></div>';
   });
   results.innerHTML = html;
 }
