@@ -390,12 +390,12 @@
         <div class="table-title" style="margin-bottom:.2rem">Actual vs Predicted</div>
         <div class="section-copy" style="margin-bottom:0">Compare each saved 1-hour and 3-hour prediction against the later bridge reading that arrived after that forecast window.</div>
       </div>
-      <div class="btn-row">
+    <div class="btn-row">
         <button class="tbtn rfbtn" onclick="refreshActualVsPredicted()">Refresh Comparison</button>
       </div>
     </div>
     <div id="actualVsPredictedContent">
-      <div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>
+      <div style="text-align:center;color:#334155;padding:1rem">Tap Refresh Comparison to load the actual-vs-predicted analysis.</div>
     </div>
   </div>
 
@@ -408,7 +408,7 @@
       <button class="tbtn" onclick="refreshTrainingMode()">Refresh Training Status</button>
     </div>
     <div id="trainingModeContent">
-      <div style="text-align:center;color:#334155;padding:1rem">Loading training status...</div>
+      <div style="text-align:center;color:#334155;padding:1rem">Tap Refresh Training Status to load the training metrics.</div>
     </div>
   </div>
 
@@ -628,7 +628,7 @@ async function loadTrainingMode(){
     const data=await fetchJsonSafe('/api/dashboard-data?include_training=1');
     renderTrainingMode(data.training_status || data);
   }catch(e){
-    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Training metrics are temporarily unavailable on this deployment. Tap Refresh Training Status to try again.</div>';
   }
 }
 
@@ -767,7 +767,7 @@ async function loadActualVsPredicted(){
     }
     content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: Comparison data was not included in the dashboard response.</div>';
   }catch(e){
-    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: '+e.message+'</div>';
+    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Comparison is temporarily unavailable on this deployment. Tap Refresh Comparison to try again.</div>';
   }
 }
 
@@ -820,8 +820,6 @@ async function loadDashboard(){
 }
 
 loadDashboard();
-loadTrainingMode();
-loadActualVsPredicted();
 setInterval(loadDashboard,30000);
 </script>
 </body>
