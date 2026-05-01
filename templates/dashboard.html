@@ -383,25 +383,19 @@
     </div>
   </div>
 
-  <!-- Recent readings table -->
+  <!-- Actual vs Predicted -->
   <div class="table-card">
-    <div class="table-title">Recent Readings</div>
-    <div style="overflow-x:auto">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Timestamp</th>
-            <th>Device</th>
-            <th>Rainfall (mm)</th>
-            <th>Water Level (cm)</th>
-            <th>Flow Rate (L)</th>
-            <th>Risk</th>
-          </tr>
-        </thead>
-        <tbody id="recentTableBody">
-          <tr><td colspan="6" style="text-align:center;color:#334155;padding:1rem">Loading...</td></tr>
-        </tbody>
-      </table>
+    <div class="section-head">
+      <div>
+        <div class="table-title" style="margin-bottom:.2rem">Actual vs Predicted</div>
+        <div class="section-copy" style="margin-bottom:0">Compare each saved 1-hour and 3-hour prediction against the later bridge reading that arrived after that forecast window.</div>
+      </div>
+      <div class="btn-row">
+        <button class="tbtn rfbtn" onclick="refreshActualVsPredicted()">Refresh Comparison</button>
+      </div>
+    </div>
+    <div id="actualVsPredictedContent">
+      <div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>
     </div>
   </div>
 
@@ -418,20 +412,6 @@
     </div>
   </div>
 
-  <div class="table-card">
-    <div class="section-head">
-      <div>
-        <div class="table-title" style="margin-bottom:.2rem">Actual vs Predicted</div>
-        <div class="section-copy" style="margin-bottom:0">Compare each saved 1-hour and 3-hour prediction against the later bridge reading that arrived after that forecast window.</div>
-      </div>
-      <div class="btn-row">
-        <button class="tbtn rfbtn" onclick="refreshActualVsPredicted()">Refresh Comparison</button>
-      </div>
-    </div>
-    <div id="actualVsPredictedContent">
-      <div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -833,20 +813,6 @@ async function loadDashboard(){
     updateChart('chartRain1',mkLabels(b1_20),b1_20.map(r=>parseFloat(r.total_rain||0)));
     updateChart('chartWL2',mkLabels(b2_20),b2_20.map(r=>parseFloat(r.water_level||0)));
     updateChart('chartRain2',mkLabels(b2_20),b2_20.map(r=>parseFloat(r.total_rain||0)));
-
-    // Recent table
-    const recent=data.recent||[];
-    const tbody=document.getElementById('recentTableBody');
-    if(recent.length===0){
-      tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:#334155;padding:1rem">No readings yet.</td></tr>';
-    } else {
-      tbody.innerHTML=recent.map(r=>{
-        const wl=parseFloat(r.water_level||0),rain=parseFloat(r.total_rain||0);
-        const risk=getRiskLabel(wl,rain);
-        const dev=r.device_id==='bridge2'?'Bridge 2':'Bridge 1';
-        return '<tr><td>'+fmtTs(r.timestamp)+'</td><td style="color:#64748b">'+dev+'</td><td>'+rain.toFixed(2)+'</td><td>'+wl.toFixed(2)+'</td><td>'+parseFloat(r.flow_rate||0).toFixed(2)+'</td><td><span class="rbadge rb-'+risk.cls+'">'+risk.label+'</span></td></tr>';
-      }).join('');
-    }
 
   } catch(e){
     console.error('loadDashboard failed:',e);
