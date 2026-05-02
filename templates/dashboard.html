@@ -760,12 +760,8 @@ async function loadActualVsPredicted(){
   const content=document.getElementById('actualVsPredictedContent');
   content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Loading comparison...</div>';
   try{
-    const dashboardData = await fetchJsonSafe('/api/dashboard-data?include_comparison=1');
-    if(dashboardData && dashboardData.actual_vs_predicted){
-      renderActualVsPredicted(dashboardData.actual_vs_predicted);
-      return;
-    }
-    content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Failed: Comparison data was not included in the dashboard response.</div>';
+    const data=await fetchJsonSafe('/api/actual-vs-predicted');
+    renderActualVsPredicted(data);
   }catch(e){
     content.innerHTML='<div style="text-align:center;color:#334155;padding:1rem">Comparison is temporarily unavailable on this deployment. Tap Refresh Comparison to try again.</div>';
   }
@@ -820,6 +816,7 @@ async function loadDashboard(){
 }
 
 loadDashboard();
+loadActualVsPredicted();
 setInterval(loadDashboard,30000);
 </script>
 </body>
