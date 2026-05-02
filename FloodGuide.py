@@ -866,6 +866,62 @@ def run_prediction(features, clf):
     elif pred == 1: return "Moderate", "orange", confidence
     else:           return "High",     "red",    confidence
 
+
+def predict_feature_rows(feature_rows, clf):
+    if not feature_rows:
+        return []
+
+    if clf is None:
+        return [
+            rule_based_predict({
+                "rainfall": float(features.get("total_rain") or 0),
+                "water_level": float(features.get("water_level") or 0),
+                "flow_rate": float(features.get("flow_rate") or 0),
+                "rain_3h": float(features.get("rain_3h") or 0),
+                "rise_rate": float(features.get("rise_rate") or 0),
+            })
+            for features in feature_rows
+        ]
+
+    df = pd.DataFrame(feature_rows)
+    expected_cols = list(getattr(clf, "feature_names_in_", []))
+    if expected_cols:
+        for col in expected_cols:
+            if col not in df.columns:
+                df[col] = 0.0
+        df = df[expected_cols]
+
+    try:
+        preds = clf.predict(df)
+        probabilities = clf.predict_proba(df) if hasattr(clf, "predict_proba") else None
+    except Exception as e:
+        print(f"⚠️ Batch ML prediction error: {e} — rule-based fallback")
+        return [
+            rule_based_predict({
+                "rainfall": float(features.get("total_rain") or 0),
+                "water_level": float(features.get("water_level") or 0),
+                "flow_rate": float(features.get("flow_rate") or 0),
+                "rain_3h": float(features.get("rain_3h") or 0),
+                "rise_rate": float(features.get("rise_rate") or 0),
+            })
+            for features in feature_rows
+        ]
+
+    results = []
+    for idx, pred in enumerate(preds):
+        confidence = 0.0
+        if probabilities is not None and idx < len(probabilities):
+            confidence = round(float(max(probabilities[idx])) * 100, 2)
+
+        if int(pred) == 0:
+            results.append(("Low", "green", confidence))
+        elif int(pred) == 1:
+            results.append(("Moderate", "orange", confidence))
+        else:
+            results.append(("High", "red", confidence))
+
+    return results
+
 # =========================================
 # PREDICTION ENGINE
 # Computes CURRENT risk + PREDICTED risk
@@ -1475,7 +1531,6 @@ def receive_sensor():
     latest_sensor_data[device_id]["flow_rate"]   = flow_rate
 
     insert_sensor_reading(device_id, rainfall, water_level, flow_rate)
-    invalidate_actual_vs_predicted_cache()
 
     return jsonify({"status": "received", "device": device_id})
 
@@ -1533,6 +1588,7 @@ def compute_actual_vs_predicted_payload():
     scored_rows = []
     actual_numeric = []
     predicted_numeric = []
+    comparison_jobs = []
     horizon_stats = {
         "1h": {"correct": 0, "total": 0, "pending": 0},
         "3h": {"correct": 0, "total": 0, "pending": 0},
@@ -1568,28 +1624,54 @@ def compute_actual_vs_predicted_payload():
                     "rise_rate": float(row.get("rise_rate") or 0) + (predicted_additional_rain * 0.1),
                     "month": month,
                 }
-                predicted_label, _, confidence = run_prediction(predicted_features, clf)
-                predicted_value = normalize_flood_label(predicted_label)
-                if predicted_value is None:
-                    predicted_value = 0
-
-                is_match = predicted_value == actual_value
-                horizon_stats[horizon_key]["total"] += 1
-                if is_match:
-                    horizon_stats[horizon_key]["correct"] += 1
-
-                actual_numeric.append(actual_value)
-                predicted_numeric.append(predicted_value)
-                scored_rows.append({
-                    "prediction_time": base_time.isoformat(),
-                    "actual_time": future_row["timestamp"].isoformat() if hasattr(future_row["timestamp"], "isoformat") else str(future_row["timestamp"]),
+                comparison_jobs.append({
+                    "features": predicted_features,
                     "device_id": device_id,
                     "horizon": horizon_key,
-                    "actual": flood_label_text(actual_value),
-                    "predicted": flood_label_text(predicted_value),
-                    "confidence": round(float(confidence), 1),
-                    "match": is_match,
+                    "actual_value": actual_value,
+                    "prediction_time": base_time,
+                    "actual_time": future_row["timestamp"],
                 })
+
+    if not comparison_jobs:
+        return {
+            "setup_required": True,
+            "message": "Historical predictions are not ready yet because the dataset does not have enough later readings for 1-hour or 3-hour comparisons.",
+            "evaluation_method": "Historical backtest against later actual bridge readings",
+            "rows": [],
+        }
+
+    batch_predictions = predict_feature_rows(
+        [job["features"] for job in comparison_jobs],
+        clf
+    )
+
+    for job, prediction in zip(comparison_jobs, batch_predictions):
+        predicted_label, _, confidence = prediction
+        predicted_value = normalize_flood_label(predicted_label)
+        if predicted_value is None:
+            predicted_value = 0
+
+        actual_value = int(job["actual_value"])
+        horizon_key = job["horizon"]
+        is_match = predicted_value == actual_value
+
+        horizon_stats[horizon_key]["total"] += 1
+        if is_match:
+            horizon_stats[horizon_key]["correct"] += 1
+
+        actual_numeric.append(actual_value)
+        predicted_numeric.append(predicted_value)
+        scored_rows.append({
+            "prediction_time": job["prediction_time"].isoformat() if hasattr(job["prediction_time"], "isoformat") else str(job["prediction_time"]),
+            "actual_time": job["actual_time"].isoformat() if hasattr(job["actual_time"], "isoformat") else str(job["actual_time"]),
+            "device_id": job["device_id"],
+            "horizon": horizon_key,
+            "actual": flood_label_text(actual_value),
+            "predicted": flood_label_text(predicted_value),
+            "confidence": round(float(confidence), 1),
+            "match": is_match,
+        })
 
     if not scored_rows:
         return {
