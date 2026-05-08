@@ -791,16 +791,16 @@ def bootstrap_label_from_features(row):
 def rebuild_bootstrap_dataset():
     ensure_bootstrap_table()
 
-    conn = get_db_connection()
+    read_conn = get_db_connection()
     sensor_df = pd.read_sql(
         """SELECT id, timestamp, device_id, total_rain, water_level, flow_rate
            FROM sensor_readings
            ORDER BY timestamp ASC""",
-        conn
+        read_conn
     )
+    read_conn.close()
 
     if sensor_df.empty:
-        conn.close()
         return {
             "rows_written": 0,
             "class_counts": {0: 0, 1: 0, 2: 0},
@@ -827,26 +827,33 @@ def rebuild_bootstrap_dataset():
             str(row.get("label_origin", "threshold_bootstrap"))
         ))
 
-    cursor = conn.cursor()
+    write_conn = get_db_connection()
+    cursor = write_conn.cursor()
     cursor.execute(f"DELETE FROM {BOOTSTRAP_TABLE}")
-    cursor.executemany(
-        f"""
+    write_conn.commit()
+
+    insert_sql = f"""
         INSERT INTO {BOOTSTRAP_TABLE}
         (reading_id, device_id, timestamp, total_rain, water_level, flow_rate,
          rain_3h, rise_rate, flooded, label_origin)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        rows
-    )
-    conn.commit()
+    """
+    batch_size = 500
+    written = 0
+    for start in range(0, len(rows), batch_size):
+        batch = rows[start:start + batch_size]
+        cursor.executemany(insert_sql, batch)
+        write_conn.commit()
+        written += len(batch)
+
     cursor.close()
-    conn.close()
+    write_conn.close()
 
     class_counts = sensor_df["flooded"].astype(int).value_counts().sort_index().to_dict()
     return {
-        "rows_written": len(rows),
+        "rows_written": written,
         "class_counts": {0: int(class_counts.get(0, 0)), 1: int(class_counts.get(1, 0)), 2: int(class_counts.get(2, 0))},
-        "message": f"Bootstrap dataset rebuilt from {len(rows)} sensor rows."
+        "message": f"Bootstrap dataset rebuilt from {written} sensor rows."
     }
 
 
