@@ -137,6 +137,7 @@
     .comparison-stat{background:#0a0f1e;border-radius:8px;padding:.8rem;text-align:center}
     .comparison-value{font-size:1.5rem;font-weight:700;line-height:1;color:#e2e8f0}
     .comparison-label{font-size:.58rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.25rem}
+    .comparison-submeta{font-size:.56rem;color:#475569;margin-top:.18rem}
     .comparison-note{background:#0a0f1e;border-radius:7px;padding:.85rem;color:#94a3b8;font-size:.72rem;line-height:1.6;margin-bottom:.85rem}
     .comparison-note.warn{border:1px solid #f59e0b40}
     .comparison-hero{background:#0a0f1e;border-radius:8px;padding:1rem 1.2rem;text-align:center;margin-bottom:.85rem}
@@ -679,8 +680,10 @@ function renderTrainingMode(data,message){
     return;
   }
   const classCounts=(data.class_counts||data.training_status?.class_counts||{});
+  const balancedClassCounts=(data.balanced_class_counts||data.training_status?.balanced_class_counts||{});
   const sources=data.sources||data.training_status?.sources||{};
   const bootstrapRows=data.bootstrap_rows??data.training_status?.bootstrap_rows??0;
+  const balancedRows=data.balanced_rows??data.training_status?.balanced_rows??0;
   const modelLoaded=!!(data.model_loaded??data.training_status?.model_loaded);
   const lastBuilt=data.last_built_at||data.training_status?.last_built_at;
   const evaluation=data.evaluation||data.training_status?.evaluation||{};
@@ -699,8 +702,10 @@ function renderTrainingMode(data,message){
       '<div class="acc-lbl">'+(evalReady?'Bootstrap Model Accuracy':'Bootstrap Training Rows')+'</div>'+
       '<div class="acc-sub">'+statusText+'</div>'+
       '<div class="acc-sub" style="margin-top:.25rem">Balanced accuracy: '+evalBalanced+'</div>'+
-      '<div class="acc-sub" style="margin-top:.25rem">Class mix: '+trainingClassLine(classCounts)+'</div>'+
-      '<div class="acc-sub" style="margin-top:.25rem">Optional PAGASA rows: '+(sources.pagasa_rows||0)+(sources.pagasa_enabled&&!sources.pagasa_rows?' (file not loaded yet)':'')+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Original class mix: '+trainingClassLine(classCounts)+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">Balanced retrain mix: '+trainingClassLine(balancedClassCounts)+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">PAGASA labeled rows: '+(sources.pagasa_rows||0)+' • PAGASA weather rows: '+(sources.pagasa_weather_rows||0)+(sources.pagasa_enabled&&!(sources.pagasa_rows||sources.pagasa_weather_rows)?' (file not loaded yet)':'')+'</div>'+
+      '<div class="acc-sub" style="margin-top:.25rem">PAGASA mode: '+(sources.pagasa_mode||'none')+'</div>'+
       '<div class="acc-sub" style="margin-top:.25rem">Evaluation: '+evalMethod+'</div>'+
       '<div class="acc-sub" style="margin-top:.25rem">Last bootstrap build: '+lastBuiltText+'</div>'+
     '</div>'+
@@ -709,12 +714,17 @@ function renderTrainingMode(data,message){
       '<div class="cc"><div class="cn train-warn">'+(classCounts[1]||0)+'</div><div class="cl">Moderate training rows</div></div>'+
       '<div class="cc"><div class="cn" style="color:#ef4444">'+(classCounts[2]||0)+'</div><div class="cl">High training rows</div></div>'+
     '</div>'+
-    '<div class="train-note train-status">Source rows: Bootstrap '+bootstrapRows+', PAGASA '+(sources.pagasa_rows||0)+'. Build the bootstrap dataset first, then retrain the model whenever new readings are added.</div>';
+    '<div class="cg">'+
+      '<div class="cc"><div class="cn train-ok">'+(balancedClassCounts[0]||0)+'</div><div class="cl">Balanced Low rows</div></div>'+
+      '<div class="cc"><div class="cn train-warn">'+(balancedClassCounts[1]||0)+'</div><div class="cl">Balanced Moderate rows</div></div>'+
+      '<div class="cc"><div class="cn" style="color:#ef4444">'+(balancedClassCounts[2]||0)+'</div><div class="cl">Balanced High rows</div></div>'+
+    '</div>'+
+    '<div class="train-note train-status">Source rows: Bootstrap '+bootstrapRows+', PAGASA labeled '+(sources.pagasa_rows||0)+', PAGASA weather '+(sources.pagasa_weather_rows||0)+'. Balanced retrain rows: '+balancedRows+'. Build the bootstrap dataset first, then retrain the model whenever new readings are added.</div>';
 
   const rfTrainSamples=document.getElementById('rfTrainSamples');
   const rfEvalAccuracy=document.getElementById('rfEvalAccuracy');
   const rfEvalMethod=document.getElementById('rfEvalMethod');
-  if(rfTrainSamples) rfTrainSamples.textContent='Bootstrap ' + bootstrapRows + ' rows, PAGASA ' + (sources.pagasa_rows||0) + ' rows';
+  if(rfTrainSamples) rfTrainSamples.textContent='Bootstrap ' + bootstrapRows + ' rows, PAGASA labeled ' + (sources.pagasa_rows||0) + ', PAGASA weather ' + (sources.pagasa_weather_rows||0) + ', balanced retrain ' + balancedRows + ' rows';
   if(rfEvalAccuracy){
     rfEvalAccuracy.textContent=evalReady?evalAccuracy:'Not ready';
     rfEvalAccuracy.style.color=evalReady?'#22c55e':'#64748b';
@@ -849,16 +859,16 @@ function renderActualVsPredicted(data){
     '<div class="comparison-chart-wrap"><canvas id="chartActualVsPredicted"></canvas></div>'+
     '<div class="comparison-block-title">Correct Predictions</div>'+
     '<div class="comparison-grid">'+
-      '<div class="comparison-stat"><div class="comparison-value" style="color:#22c55e">'+(correctByClass.low_correct||0)+'</div><div class="comparison-label">Low ✓</div></div>'+
-      '<div class="comparison-stat"><div class="comparison-value" style="color:#f59e0b">'+(correctByClass.mod_correct||0)+'</div><div class="comparison-label">Moderate ✓</div></div>'+
-      '<div class="comparison-stat"><div class="comparison-value" style="color:#ef4444">'+(correctByClass.high_correct||0)+'</div><div class="comparison-label">High ✓</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#22c55e">'+(correctByClass.low_correct||0)+'</div><div class="comparison-label">Low ✓</div><div class="comparison-submeta">Predicted '+(predictionCounts[0]||0)+'</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#f59e0b">'+(correctByClass.mod_correct||0)+'</div><div class="comparison-label">Moderate ✓</div><div class="comparison-submeta">Predicted '+(predictionCounts[1]||0)+'</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value" style="color:#ef4444">'+(correctByClass.high_correct||0)+'</div><div class="comparison-label">High ✓</div><div class="comparison-submeta">Predicted '+(predictionCounts[2]||0)+'</div></div>'+
       '<div class="comparison-stat"><div class="comparison-value" style="color:#38bdf8">'+correct+'</div><div class="comparison-label">Total ✓</div></div>'+
     '</div>'+
     '<div class="comparison-block-title">Misclassifications</div>'+
     '<div class="comparison-grid">'+
-      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.low_wrong||0)+'</div><div class="comparison-label">Low wrong</div></div>'+
-      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.mod_wrong||0)+'</div><div class="comparison-label">Moderate wrong</div></div>'+
-      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.high_wrong||0)+'</div><div class="comparison-label">High wrong</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.low_wrong||0)+'</div><div class="comparison-label">Low wrong</div><div class="comparison-submeta">Actual '+(classCounts[0]||0)+'</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.mod_wrong||0)+'</div><div class="comparison-label">Moderate wrong</div><div class="comparison-submeta">Predicted '+(predictionCounts[1]||0)+'</div></div>'+
+      '<div class="comparison-stat"><div class="comparison-value">'+(wrongByClass.high_wrong||0)+'</div><div class="comparison-label">High wrong</div><div class="comparison-submeta">Predicted '+(predictionCounts[2]||0)+'</div></div>'+
       '<div class="comparison-stat"><div class="comparison-value">'+Math.max(total-correct,0)+'</div><div class="comparison-label">Total wrong</div></div>'+
     '</div>'+
     '<div class="comparison-block-title">Last 30 Scored Rows</div>'+
