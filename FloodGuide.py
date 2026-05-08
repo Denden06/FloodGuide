@@ -63,12 +63,34 @@ def get_db_connection():
 # =========================================
 API_KEY    = "e2a8ee9c6e8ec237763497022a1309bb"
 MODEL_PATH = "model_class.pkl"
-PAGASA_DATASET_PATH = os.getenv("PAGASA_DATASET_PATH", "pagasa_labeled.csv")
+PAGASA_DATASET_PATH = os.getenv("PAGASA_DATASET_PATH", "")
+PAGASA_DATASET_CANDIDATES = [
+    "pagasa_labeled.csv",
+    "Mactan_Daily_Data.csv",
+]
 BOOTSTRAP_TABLE = "bootstrap_training_data"
 PREDICTION_AUDIT_TABLE = "prediction_audit"
 READING_INTERVAL_MINUTES = 10
 RAIN_3H_WINDOW_READINGS = max(1, int(180 / READING_INTERVAL_MINUTES))
 RISE_RATE_WINDOW_READINGS = 1
+TRAINING_FEATURE_COLUMNS = [
+    "total_rain",
+    "water_level",
+    "flow_rate",
+    "rain_30m",
+    "rain_1h",
+    "rain_3h",
+    "wl_change_10m",
+    "wl_change_30m",
+    "wl_avg_1h",
+    "flow_avg_1h",
+    "pagasa_daily_rain",
+    "pagasa_tmax",
+    "pagasa_tmin",
+    "pagasa_rh",
+    "rise_rate",
+    "month",
+]
 GOOGLE_MAPS_API_KEY = os.getenv(
     "GOOGLE_MAPS_API_KEY",
     "AIzaSyBfyF6DofStbAoUKcG83eEBE72OpaLqTus"
@@ -80,14 +102,26 @@ latest_sensor_data = {
         "water_level": 0.0,
         "rainfall":    0.0,
         "flow_rate":   0.0,
+        "rain_30m":    0.0,
+        "rain_1h":     0.0,
         "rain_3h":     0.0,
+        "wl_change_10m": 0.0,
+        "wl_change_30m": 0.0,
+        "wl_avg_1h":   0.0,
+        "flow_avg_1h": 0.0,
         "rise_rate":   0.0
     },
     "bridge2": {
         "water_level": 0.0,
         "rainfall":    0.0,
         "flow_rate":   0.0,
+        "rain_30m":    0.0,
+        "rain_1h":     0.0,
         "rain_3h":     0.0,
+        "wl_change_10m": 0.0,
+        "wl_change_30m": 0.0,
+        "wl_avg_1h":   0.0,
+        "flow_avg_1h": 0.0,
         "rise_rate":   0.0
     }
 }
@@ -98,6 +132,7 @@ TRAINING_STATUS_CACHE_TTL = 300
 ACTUAL_VS_PREDICTED_CACHE_TTL = 300
 training_status_cache = {"value": None, "expires_at": 0}
 actual_vs_predicted_cache = {"value": None, "expires_at": 0}
+pagasa_dataset_cache = {"path": None, "mtime": None, "labeled_df": None, "weather_df": None, "meta": None}
 
 MONITORED_SITES = [
     {"id": "bridge1", "name": "Mandaue-Mactan Bridge 1", "lat": 10.326490, "lng": 123.952142},
@@ -189,15 +224,49 @@ def prepare_feature_frame(df):
 
     work = work.sort_values(sort_cols).reset_index(drop=True)
 
+    def add_change_feature(frame, source_col, minutes, target_col):
+        if frame.empty:
+            frame[target_col] = 0.0
+            return frame
+
+        lookup = frame[["timestamp", source_col]].copy()
+        lookup["_row"] = frame.index.to_numpy()
+        lookup["current_value"] = lookup[source_col].astype(float)
+        lookup["lookup_time"] = lookup["timestamp"] - pd.Timedelta(minutes=minutes)
+
+        history = (
+            frame[["timestamp", source_col]]
+            .rename(columns={"timestamp": "history_timestamp", source_col: "history_value"})
+            .sort_values("history_timestamp")
+        )
+
+        merged = pd.merge_asof(
+            lookup.sort_values("lookup_time"),
+            history,
+            left_on="lookup_time",
+            right_on="history_timestamp",
+            direction="backward",
+            allow_exact_matches=True,
+        )
+        merged[target_col] = merged["current_value"] - merged["history_value"].fillna(merged["current_value"])
+        frame[target_col] = merged.sort_values("_row")[target_col].to_numpy()
+        return frame
+
     def apply_time_features(group):
         ordered = group.sort_values(sort_cols).copy()
         ordered["timestamp"] = pd.to_datetime(ordered["timestamp"])
+        rolling_rain = ordered.set_index("timestamp")["total_rain"]
+        rolling_wl = ordered.set_index("timestamp")["water_level"]
+        rolling_flow = ordered.set_index("timestamp")["flow_rate"]
+        ordered["rain_30m"] = rolling_rain.rolling("30min", min_periods=1).sum().to_numpy()
+        ordered["rain_1h"] = rolling_rain.rolling("1h", min_periods=1).sum().to_numpy()
         ordered["rain_3h"] = (
-            ordered.set_index("timestamp")["total_rain"]
-            .rolling("3h", min_periods=1)
-            .sum()
-            .to_numpy()
+            rolling_rain.rolling("3h", min_periods=1).sum().to_numpy()
         )
+        ordered["wl_avg_1h"] = rolling_wl.rolling("1h", min_periods=1).mean().to_numpy()
+        ordered["flow_avg_1h"] = rolling_flow.rolling("1h", min_periods=1).mean().to_numpy()
+        ordered = add_change_feature(ordered, "water_level", 10, "wl_change_10m")
+        ordered = add_change_feature(ordered, "water_level", 30, "wl_change_30m")
         ordered["rise_rate"] = ordered["water_level"].diff().fillna(0)
         return ordered
 
@@ -212,6 +281,8 @@ def prepare_feature_frame(df):
     work["month"] = work["timestamp"].dt.month
 
     final_sort = ["timestamp"]
+    if "device_id" in work.columns:
+        final_sort = ["device_id", "timestamp"]
     if "id" in work.columns:
         final_sort.append("id")
 
@@ -246,14 +317,115 @@ def prediction_bucket_for(ts, minutes=10):
     return ts.replace(minute=bucket_minute, second=0, microsecond=0)
 
 
-def load_pagasa_dataset():
-    if not PAGASA_DATASET_PATH or not os.path.exists(PAGASA_DATASET_PATH):
-        return pd.DataFrame(), {"enabled": False, "path": PAGASA_DATASET_PATH, "rows": 0}
+def resolve_pagasa_dataset_path():
+    if PAGASA_DATASET_PATH:
+        return PAGASA_DATASET_PATH
+    for candidate in PAGASA_DATASET_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
+    return PAGASA_DATASET_CANDIDATES[0]
+
+
+def empty_pagasa_weather_df():
+    return pd.DataFrame(columns=["date", "pagasa_daily_rain", "pagasa_tmax", "pagasa_tmin", "pagasa_rh"])
+
+
+def ensure_pagasa_feature_columns(df):
+    work = df.copy()
+    for col in ("pagasa_daily_rain", "pagasa_tmax", "pagasa_tmin", "pagasa_rh"):
+        if col not in work.columns:
+            work[col] = 0.0
+        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+    return work
+
+
+def enrich_with_pagasa_weather(df, weather_df):
+    work = ensure_pagasa_feature_columns(df)
+    if work.empty or weather_df is None or weather_df.empty or "timestamp" not in work.columns:
+        return work
+
+    weather = weather_df.copy()
+    weather["date"] = pd.to_datetime(weather["date"], errors="coerce").dt.floor("D")
+
+    work["timestamp"] = pd.to_datetime(work["timestamp"], errors="coerce")
+    work["date"] = work["timestamp"].dt.floor("D")
+    work = work.merge(weather, on="date", how="left", suffixes=("", "_pagasa"))
+
+    for col in ("pagasa_daily_rain", "pagasa_tmax", "pagasa_tmin", "pagasa_rh"):
+        merged_col = f"{col}_pagasa"
+        if merged_col in work.columns:
+            work[col] = pd.to_numeric(work[merged_col], errors="coerce").fillna(work[col])
+            work = work.drop(columns=[merged_col])
+        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+
+    return work.drop(columns=["date"], errors="ignore")
+
+
+def pagasa_weather_features_for_timestamp(ts):
+    _, weather_df, _ = load_pagasa_dataset()
+    if weather_df is None or weather_df.empty:
+        return {
+            "pagasa_daily_rain": 0.0,
+            "pagasa_tmax": 0.0,
+            "pagasa_tmin": 0.0,
+            "pagasa_rh": 0.0,
+        }
+
+    target_date = pd.Timestamp(ts).floor("D")
+    match = weather_df[weather_df["date"] == target_date]
+    if match.empty:
+        return {
+            "pagasa_daily_rain": 0.0,
+            "pagasa_tmax": 0.0,
+            "pagasa_tmin": 0.0,
+            "pagasa_rh": 0.0,
+        }
+
+    row = match.iloc[-1]
+    return {
+        "pagasa_daily_rain": float(row.get("pagasa_daily_rain") or 0),
+        "pagasa_tmax": float(row.get("pagasa_tmax") or 0),
+        "pagasa_tmin": float(row.get("pagasa_tmin") or 0),
+        "pagasa_rh": float(row.get("pagasa_rh") or 0),
+    }
+
+
+def load_pagasa_dataset(force=False):
+    path = resolve_pagasa_dataset_path()
+    if not path or not os.path.exists(path):
+        return pd.DataFrame(), empty_pagasa_weather_df(), {
+            "enabled": False,
+            "path": path,
+            "rows": 0,
+            "weather_rows": 0,
+            "mode": "missing",
+        }
+
+    mtime = os.path.getmtime(path)
+    if (
+        not force
+        and pagasa_dataset_cache["path"] == path
+        and pagasa_dataset_cache["mtime"] == mtime
+        and pagasa_dataset_cache["labeled_df"] is not None
+        and pagasa_dataset_cache["weather_df"] is not None
+        and pagasa_dataset_cache["meta"] is not None
+    ):
+        return (
+            pagasa_dataset_cache["labeled_df"].copy(),
+            pagasa_dataset_cache["weather_df"].copy(),
+            dict(pagasa_dataset_cache["meta"]),
+        )
 
     try:
-        raw = pd.read_csv(PAGASA_DATASET_PATH)
+        raw = pd.read_csv(path)
         if raw.empty:
-            return pd.DataFrame(), {"enabled": True, "path": PAGASA_DATASET_PATH, "rows": 0}
+            return pd.DataFrame(), empty_pagasa_weather_df(), {
+                "enabled": True,
+                "path": path,
+                "rows": 0,
+                "weather_rows": 0,
+                "mode": "empty",
+            }
 
         normalized = raw.copy()
         normalized.columns = [
@@ -278,14 +450,67 @@ def load_pagasa_dataset():
 
         required = {"timestamp", "total_rain", "water_level", "flooded"}
         if not required.issubset(selected.keys()):
-            missing = sorted(required - set(selected.keys()))
-            print(f"⚠️ PAGASA dataset missing required columns: {missing}")
-            return pd.DataFrame(), {
-                "enabled": True,
-                "path": PAGASA_DATASET_PATH,
-                "rows": 0,
-                "error": f"Missing columns: {', '.join(missing)}"
+            daily_required = {"year", "month", "day", "rainfall"}
+            daily_alias_map = {
+                "year": ["year"],
+                "month": ["month"],
+                "day": ["day"],
+                "rainfall": ["rainfall", "rain_mm", "rain", "precipitation", "total_rain"],
+                "tmax": ["tmax", "max_temp", "temperature_max"],
+                "tmin": ["tmin", "min_temp", "temperature_min"],
+                "rh": ["rh", "humidity", "relative_humidity"],
             }
+
+            daily_selected = {}
+            for target, aliases in daily_alias_map.items():
+                match = next((name for name in aliases if name in normalized.columns), None)
+                if match:
+                    daily_selected[target] = normalized[match]
+
+            if not daily_required.issubset(daily_selected.keys()):
+                missing = sorted(required - set(selected.keys()))
+                print(f"⚠️ PAGASA dataset missing required columns: {missing}")
+                return pd.DataFrame(), empty_pagasa_weather_df(), {
+                    "enabled": True,
+                    "path": path,
+                    "rows": 0,
+                    "weather_rows": 0,
+                    "mode": "invalid",
+                    "error": f"Missing columns: {', '.join(missing)}"
+                }
+
+            weather_df = pd.DataFrame(daily_selected)
+            weather_df["date"] = pd.to_datetime(
+                {
+                    "year": pd.to_numeric(weather_df["year"], errors="coerce"),
+                    "month": pd.to_numeric(weather_df["month"], errors="coerce"),
+                    "day": pd.to_numeric(weather_df["day"], errors="coerce"),
+                },
+                errors="coerce",
+            )
+            weather_df["pagasa_daily_rain"] = pd.to_numeric(weather_df["rainfall"], errors="coerce").fillna(0.0)
+            weather_df["pagasa_tmax"] = pd.to_numeric(weather_df.get("tmax", 0), errors="coerce").fillna(0.0)
+            weather_df["pagasa_tmin"] = pd.to_numeric(weather_df.get("tmin", 0), errors="coerce").fillna(0.0)
+            weather_df["pagasa_rh"] = pd.to_numeric(weather_df.get("rh", 0), errors="coerce").fillna(0.0)
+            weather_df = weather_df.dropna(subset=["date"]).copy()
+            weather_df["date"] = pd.to_datetime(weather_df["date"]).dt.floor("D")
+            weather_df = weather_df[["date", "pagasa_daily_rain", "pagasa_tmax", "pagasa_tmin", "pagasa_rh"]]
+
+            meta = {
+                "enabled": True,
+                "path": path,
+                "rows": 0,
+                "weather_rows": len(weather_df),
+                "mode": "daily_weather",
+            }
+            pagasa_dataset_cache.update({
+                "path": path,
+                "mtime": mtime,
+                "labeled_df": pd.DataFrame(),
+                "weather_df": weather_df.copy(),
+                "meta": dict(meta),
+            })
+            return pd.DataFrame(), weather_df, meta
 
         df = pd.DataFrame(selected)
         if "flow_rate" not in df.columns:
@@ -304,17 +529,29 @@ def load_pagasa_dataset():
         df["id"] = -1 * (pd.RangeIndex(start=1, stop=len(df) + 1))
         df = df[["id", "timestamp", "device_id", "total_rain", "water_level", "flow_rate", "flooded", "source"]]
 
-        return df, {
+        meta = {
             "enabled": True,
-            "path": PAGASA_DATASET_PATH,
-            "rows": len(df)
+            "path": path,
+            "rows": len(df),
+            "weather_rows": 0,
+            "mode": "labeled",
         }
+        pagasa_dataset_cache.update({
+            "path": path,
+            "mtime": mtime,
+            "labeled_df": df.copy(),
+            "weather_df": empty_pagasa_weather_df(),
+            "meta": dict(meta),
+        })
+        return df, empty_pagasa_weather_df(), meta
     except Exception as e:
         print(f"⚠️ Could not load PAGASA dataset: {e}")
-        return pd.DataFrame(), {
+        return pd.DataFrame(), empty_pagasa_weather_df(), {
             "enabled": True,
-            "path": PAGASA_DATASET_PATH,
+            "path": path,
             "rows": 0,
+            "weather_rows": 0,
+            "mode": "error",
             "error": str(e)
         }
 
@@ -346,7 +583,7 @@ def load_labelled_training_data(limit_db=None):
     if not db_df.empty:
         db_df["source"] = "database"
 
-    pagasa_df, pagasa_meta = load_pagasa_dataset()
+    pagasa_df, pagasa_weather_df, pagasa_meta = load_pagasa_dataset()
 
     frames = []
     if not db_df.empty:
@@ -358,21 +595,26 @@ def load_labelled_training_data(limit_db=None):
         return pd.DataFrame(), {
             "database_rows": 0,
             "pagasa_rows": pagasa_meta.get("rows", 0),
+            "pagasa_weather_rows": pagasa_meta.get("weather_rows", 0),
             "pagasa_enabled": pagasa_meta.get("enabled", False),
             "pagasa_path": pagasa_meta.get("path", PAGASA_DATASET_PATH),
+            "pagasa_mode": pagasa_meta.get("mode"),
             "pagasa_error": pagasa_meta.get("error"),
         }
 
     combined = pd.concat(frames, ignore_index=True, sort=False)
     combined = prepare_feature_frame(combined)
+    combined = enrich_with_pagasa_weather(combined, pagasa_weather_df)
     combined["flooded"] = pd.to_numeric(combined["flooded"], errors="coerce")
     combined = combined[combined["flooded"].isin([0, 1, 2])].copy()
 
     meta = {
         "database_rows": 0 if db_df.empty else len(db_df),
         "pagasa_rows": pagasa_meta.get("rows", 0),
+        "pagasa_weather_rows": pagasa_meta.get("weather_rows", 0),
         "pagasa_enabled": pagasa_meta.get("enabled", False),
         "pagasa_path": pagasa_meta.get("path", PAGASA_DATASET_PATH),
+        "pagasa_mode": pagasa_meta.get("mode"),
         "pagasa_error": pagasa_meta.get("error"),
     }
     return combined, meta
@@ -626,9 +868,10 @@ def load_bootstrap_training_data():
         bootstrap_df["month"] = bootstrap_df["timestamp"].dt.month
         bootstrap_df = bootstrap_df.fillna(0)
 
-    pagasa_df, pagasa_meta = load_pagasa_dataset()
+    pagasa_df, pagasa_weather_df, pagasa_meta = load_pagasa_dataset()
     if not pagasa_df.empty:
         pagasa_df = prepare_feature_frame(pagasa_df)
+        pagasa_df = enrich_with_pagasa_weather(pagasa_df, pagasa_weather_df)
     frames = []
     if not bootstrap_df.empty:
         frames.append(bootstrap_df)
@@ -638,17 +881,50 @@ def load_bootstrap_training_data():
     combined = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
     if not combined.empty:
         combined = prepare_feature_frame(combined)
+        combined = enrich_with_pagasa_weather(combined, pagasa_weather_df)
         combined["flooded"] = pd.to_numeric(combined["flooded"], errors="coerce")
         combined = combined[combined["flooded"].isin([0, 1, 2])].copy()
 
     meta = {
         "bootstrap_rows": 0 if bootstrap_df.empty else len(bootstrap_df),
         "pagasa_rows": pagasa_meta.get("rows", 0),
+        "pagasa_weather_rows": pagasa_meta.get("weather_rows", 0),
         "pagasa_enabled": pagasa_meta.get("enabled", False),
         "pagasa_path": pagasa_meta.get("path", PAGASA_DATASET_PATH),
+        "pagasa_mode": pagasa_meta.get("mode"),
         "pagasa_error": pagasa_meta.get("error"),
     }
     return combined, meta
+
+
+def balance_training_dataframe(df, target_col="flooded"):
+    if df is None or df.empty:
+        return df, {}
+
+    work = df.copy()
+    work[target_col] = pd.to_numeric(work[target_col], errors="coerce")
+    work = work[work[target_col].isin([0, 1, 2])].copy()
+    if work.empty:
+        return work, {}
+
+    grouped = {int(label): group.copy() for label, group in work.groupby(target_col)}
+    if not grouped:
+        return work, {}
+
+    max_count = max(len(group) for group in grouped.values())
+    balanced_groups = []
+    balanced_counts = {}
+    for label, group in grouped.items():
+        sampled = group.sample(n=max_count, replace=len(group) < max_count, random_state=42)
+        balanced_groups.append(sampled)
+        balanced_counts[int(label)] = int(len(sampled))
+
+    balanced = (
+        pd.concat(balanced_groups, ignore_index=True)
+        .sample(frac=1, random_state=42)
+        .reset_index(drop=True)
+    )
+    return balanced, balanced_counts
 
 
 def evaluate_training_dataset(df):
@@ -659,6 +935,7 @@ def evaluate_training_dataset(df):
         }
 
     work = df.copy()
+    work = ensure_pagasa_feature_columns(work)
     work["flooded"] = pd.to_numeric(work["flooded"], errors="coerce")
     work = work[work["flooded"].isin([0, 1, 2])].copy()
     if work.empty:
@@ -687,8 +964,7 @@ def evaluate_training_dataset(df):
     from sklearn.metrics import accuracy_score, balanced_accuracy_score
     from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
-    features = ["total_rain", "water_level", "flow_rate", "rain_3h", "rise_rate", "month"]
-    X = work[features]
+    X = work[TRAINING_FEATURE_COLUMNS]
     y = work["flooded"].astype(int)
 
     n_splits = min(5, int(min_class_count))
@@ -739,15 +1015,18 @@ def get_training_mode_status():
     training_df, training_meta = load_bootstrap_training_data()
     model_loaded = load_model() is not None
     evaluation = evaluate_training_dataset(training_df)
+    balanced_training_df, balanced_class_counts = balance_training_dataframe(training_df)
 
     return {
         "model_loaded": model_loaded,
         "bootstrap_rows": int(stats.get("total_rows") or 0),
+        "balanced_rows": 0 if balanced_training_df is None or balanced_training_df.empty else int(len(balanced_training_df)),
         "class_counts": {
             0: int(stats.get("low_rows") or 0),
             1: int(stats.get("moderate_rows") or 0),
             2: int(stats.get("high_rows") or 0),
         },
+        "balanced_class_counts": {int(k): int(v) for k, v in balanced_class_counts.items()},
         "last_built_at": stats.get("last_built_at").isoformat() if hasattr(stats.get("last_built_at"), "isoformat") else stats.get("last_built_at"),
         "sources": training_meta,
         "evaluation": evaluation
@@ -861,6 +1140,12 @@ def run_prediction(features, clf):
         })
 
     df = pd.DataFrame([features])
+    expected_cols = list(getattr(clf, "feature_names_in_", []))
+    if expected_cols:
+        for col in expected_cols:
+            if col not in df.columns:
+                df[col] = 0.0
+        df = df[expected_cols]
     try:
         pred          = clf.predict(df)[0]
         probabilities = clf.predict_proba(df)[0]
@@ -946,22 +1231,50 @@ def get_predictions(device_id, forecast_1h, forecast_3h, clf):
 
     # Compute rolling features from actual history
     if using_demo_state():
+        rain_30m = float(sensor.get("rain_30m", sensor.get("rainfall", 0)) or 0)
+        rain_1h = float(sensor.get("rain_1h", sensor.get("rainfall", 0)) or 0)
         rain_3h = max(float(sensor.get("rain_3h", 0) or 0), float(sensor.get("rainfall", 0) or 0))
+        wl_change_10m = float(sensor.get("wl_change_10m", 0) or 0)
+        wl_change_30m = float(sensor.get("wl_change_30m", 0) or 0)
+        wl_avg_1h = float(sensor.get("wl_avg_1h", sensor.get("water_level", 0)) or 0)
+        flow_avg_1h = float(sensor.get("flow_avg_1h", sensor.get("flow_rate", 0)) or 0)
         rise_rate = float(sensor.get("rise_rate", 0) or 0)
     elif history:
         history_frame = prepare_feature_frame(pd.DataFrame(history))
         latest_history = history_frame.iloc[-1]
+        rain_30m = float(latest_history.get("rain_30m", sensor.get("rainfall", 0)) or 0)
+        rain_1h = float(latest_history.get("rain_1h", sensor.get("rainfall", 0)) or 0)
         rain_3h = float(latest_history.get("rain_3h", sensor.get("rainfall", 0)) or 0)
+        wl_change_10m = float(latest_history.get("wl_change_10m", 0) or 0)
+        wl_change_30m = float(latest_history.get("wl_change_30m", 0) or 0)
+        wl_avg_1h = float(latest_history.get("wl_avg_1h", sensor.get("water_level", 0)) or 0)
+        flow_avg_1h = float(latest_history.get("flow_avg_1h", sensor.get("flow_rate", 0)) or 0)
         rise_rate = float(latest_history.get("rise_rate", 0) or 0)
     else:
+        rain_30m = sensor["rainfall"]
+        rain_1h = sensor["rainfall"]
         rain_3h   = sensor["rainfall"]
+        wl_change_10m = 0.0
+        wl_change_30m = 0.0
+        wl_avg_1h = sensor["water_level"]
+        flow_avg_1h = sensor["flow_rate"]
         rise_rate = 0.0
 
     # Store computed features for popup display
+    latest_sensor_data[device_id]["rain_30m"]   = rain_30m
+    latest_sensor_data[device_id]["rain_1h"]    = rain_1h
     latest_sensor_data[device_id]["rain_3h"]   = rain_3h
+    latest_sensor_data[device_id]["wl_change_10m"] = wl_change_10m
+    latest_sensor_data[device_id]["wl_change_30m"] = wl_change_30m
+    latest_sensor_data[device_id]["wl_avg_1h"] = wl_avg_1h
+    latest_sensor_data[device_id]["flow_avg_1h"] = flow_avg_1h
     latest_sensor_data[device_id]["rise_rate"] = rise_rate
 
-    month = datetime.now().month
+    now_ts = datetime.now()
+    weather_today = pagasa_weather_features_for_timestamp(now_ts)
+    weather_1h = pagasa_weather_features_for_timestamp(now_ts + timedelta(hours=1))
+    weather_3h = pagasa_weather_features_for_timestamp(now_ts + timedelta(hours=3))
+    month = now_ts.month
 
     # ── CURRENT RISK ──
     # Based on what sensors are reading right now
@@ -969,7 +1282,17 @@ def get_predictions(device_id, forecast_1h, forecast_3h, clf):
         "total_rain":  sensor["rainfall"],
         "water_level": sensor["water_level"],
         "flow_rate":   sensor["flow_rate"],
+        "rain_30m":    rain_30m,
+        "rain_1h":     rain_1h,
         "rain_3h":     rain_3h,
+        "wl_change_10m": wl_change_10m,
+        "wl_change_30m": wl_change_30m,
+        "wl_avg_1h":   wl_avg_1h,
+        "flow_avg_1h": flow_avg_1h,
+        "pagasa_daily_rain": weather_today["pagasa_daily_rain"],
+        "pagasa_tmax": weather_today["pagasa_tmax"],
+        "pagasa_tmin": weather_today["pagasa_tmin"],
+        "pagasa_rh": weather_today["pagasa_rh"],
         "rise_rate":   rise_rate,
         "month":       month
     }
@@ -987,7 +1310,17 @@ def get_predictions(device_id, forecast_1h, forecast_3h, clf):
         "total_rain":  sensor["rainfall"] + forecast_1h,
         "water_level": predicted_wl_1h,
         "flow_rate":   sensor["flow_rate"],
+        "rain_30m":    rain_30m + forecast_1h,
+        "rain_1h":     rain_1h + forecast_1h,
         "rain_3h":     predicted_rain_1h,
+        "wl_change_10m": wl_change_10m + max(0, forecast_1h * 0.4),
+        "wl_change_30m": wl_change_30m + max(0, forecast_1h * 0.4),
+        "wl_avg_1h":   (wl_avg_1h + predicted_wl_1h) / 2.0,
+        "flow_avg_1h": flow_avg_1h,
+        "pagasa_daily_rain": weather_1h["pagasa_daily_rain"],
+        "pagasa_tmax": weather_1h["pagasa_tmax"],
+        "pagasa_tmin": weather_1h["pagasa_tmin"],
+        "pagasa_rh": weather_1h["pagasa_rh"],
         "rise_rate":   rise_rate + (forecast_1h * 0.1),
         "month":       month
     }
@@ -1001,7 +1334,17 @@ def get_predictions(device_id, forecast_1h, forecast_3h, clf):
         "total_rain":  sensor["rainfall"] + forecast_3h,
         "water_level": predicted_wl_3h,
         "flow_rate":   sensor["flow_rate"],
+        "rain_30m":    rain_30m + min(forecast_3h, forecast_1h if forecast_1h > 0 else forecast_3h),
+        "rain_1h":     rain_1h + min(forecast_3h, forecast_1h if forecast_1h > 0 else forecast_3h),
         "rain_3h":     predicted_rain_3h,
+        "wl_change_10m": wl_change_10m + max(0, forecast_3h * 0.2),
+        "wl_change_30m": wl_change_30m + max(0, forecast_3h * 0.4),
+        "wl_avg_1h":   (wl_avg_1h + predicted_wl_3h) / 2.0,
+        "flow_avg_1h": flow_avg_1h,
+        "pagasa_daily_rain": weather_3h["pagasa_daily_rain"],
+        "pagasa_tmax": weather_3h["pagasa_tmax"],
+        "pagasa_tmin": weather_3h["pagasa_tmin"],
+        "pagasa_rh": weather_3h["pagasa_rh"],
         "rise_rate":   rise_rate + (forecast_3h * 0.1),
         "month":       month
     }
@@ -1017,7 +1360,13 @@ def get_predictions(device_id, forecast_1h, forecast_3h, clf):
         "pred_risk_3h":  pred_risk_3h,
         "pred_color_3h": pred_color_3h,
         "pred_conf_3h":  pred_conf_3h,
+        "rain_30m":      rain_30m,
+        "rain_1h":       rain_1h,
         "rain_3h":       rain_3h,
+        "wl_change_10m": wl_change_10m,
+        "wl_change_30m": wl_change_30m,
+        "wl_avg_1h":     wl_avg_1h,
+        "flow_avg_1h":   flow_avg_1h,
         "rise_rate":     rise_rate,
         "forecast_1h":   forecast_1h,
         "forecast_3h":   forecast_3h,
@@ -1228,8 +1577,10 @@ def build_location_payload(loc, clf, timestamp):
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px">
             <b style="color:#e2e8f0">── Sensor Readings ──</b><br>
             🌧 Rainfall (now): {sensor['rainfall']:.2f} mm<br>
+            🌧 Rainfall (1h):  {preds['rain_1h']:.2f} mm<br>
             🌧 Rainfall (3h):  {preds['rain_3h']:.2f} mm<br>
             📏 Water Level:    {sensor['water_level']:.2f} cm<br>
+            📉 Water Level Change (10m): {preds['wl_change_10m']:.2f} cm<br>
             📈 Rise Rate:      {preds['rise_rate']:.2f} cm/reading<br>
             💧 Flow Rate:      {sensor['flow_rate']:.2f} L
         </div>
@@ -1274,8 +1625,14 @@ def build_location_payload(loc, clf, timestamp):
         "water_level":      sensor["water_level"],
         "rainfall":         sensor["rainfall"],
         "flow_rate":        sensor["flow_rate"],
+        "rain_30m":         preds["rain_30m"],
+        "rain_1h":          preds["rain_1h"],
         "rise_rate":        preds["rise_rate"],
         "rain_3h":          preds["rain_3h"],
+        "wl_change_10m":    preds["wl_change_10m"],
+        "wl_change_30m":    preds["wl_change_30m"],
+        "wl_avg_1h":        preds["wl_avg_1h"],
+        "flow_avg_1h":      preds["flow_avg_1h"],
         "forecast_1h":      forecast_1h,
         "forecast_3h":      forecast_3h,
         "forecast_6h":      forecast_3h,
@@ -1302,7 +1659,13 @@ def apply_sensor_row(device_id, row):
     latest_sensor_data[device_id]["rainfall"]    = float(row.get("total_rain") or 0)
     latest_sensor_data[device_id]["flow_rate"]   = float(row.get("flow_rate") or 0)
     flooded = int(row.get("flooded") or 0) if row.get("flooded") is not None else 0
+    latest_sensor_data[device_id]["rain_30m"]    = float(row.get("rain_30m", row.get("total_rain", 0)) or 0)
+    latest_sensor_data[device_id]["rain_1h"]     = float(row.get("rain_1h", row.get("total_rain", 0)) or 0)
     latest_sensor_data[device_id]["rain_3h"]     = float(row.get("rain_3h", row.get("total_rain", 0)) or 0)
+    latest_sensor_data[device_id]["wl_change_10m"] = float(row.get("wl_change_10m", 0) or 0)
+    latest_sensor_data[device_id]["wl_change_30m"] = float(row.get("wl_change_30m", 0) or 0)
+    latest_sensor_data[device_id]["wl_avg_1h"]   = float(row.get("wl_avg_1h", row.get("water_level", 0)) or 0)
+    latest_sensor_data[device_id]["flow_avg_1h"] = float(row.get("flow_avg_1h", row.get("flow_rate", 0)) or 0)
     latest_sensor_data[device_id]["rise_rate"]   = 6.0 if flooded >= 2 else (3.0 if flooded == 1 else 0.0)
 
 
@@ -1310,7 +1673,13 @@ def reset_sensor_row(device_id):
     latest_sensor_data[device_id]["water_level"] = 0.0
     latest_sensor_data[device_id]["rainfall"] = 0.0
     latest_sensor_data[device_id]["flow_rate"] = 0.0
+    latest_sensor_data[device_id]["rain_30m"] = 0.0
+    latest_sensor_data[device_id]["rain_1h"] = 0.0
     latest_sensor_data[device_id]["rain_3h"] = 0.0
+    latest_sensor_data[device_id]["wl_change_10m"] = 0.0
+    latest_sensor_data[device_id]["wl_change_30m"] = 0.0
+    latest_sensor_data[device_id]["wl_avg_1h"] = 0.0
+    latest_sensor_data[device_id]["flow_avg_1h"] = 0.0
     latest_sensor_data[device_id]["rise_rate"] = 0.0
 
 
@@ -1318,7 +1687,13 @@ def apply_simulation_values(device_id, values, level):
     latest_sensor_data[device_id]["water_level"] = float(values.get("water_level") or 0)
     latest_sensor_data[device_id]["rainfall"] = float(values.get("rainfall") or 0)
     latest_sensor_data[device_id]["flow_rate"] = float(values.get("flow_rate") or 0)
+    latest_sensor_data[device_id]["rain_30m"] = float(values.get("rain_30m", values.get("rainfall", 0)) or 0)
+    latest_sensor_data[device_id]["rain_1h"] = float(values.get("rain_1h", values.get("rain_3h", values.get("rainfall", 0))) or 0)
     latest_sensor_data[device_id]["rain_3h"] = float(values.get("rain_3h", values.get("rainfall", 0)) or 0)
+    latest_sensor_data[device_id]["wl_change_10m"] = float(values.get("wl_change_10m", values.get("rise_rate", 0)) or 0)
+    latest_sensor_data[device_id]["wl_change_30m"] = float(values.get("wl_change_30m", values.get("rise_rate", 0)) or 0)
+    latest_sensor_data[device_id]["wl_avg_1h"] = float(values.get("wl_avg_1h", values.get("water_level", 0)) or 0)
+    latest_sensor_data[device_id]["flow_avg_1h"] = float(values.get("flow_avg_1h", values.get("flow_rate", 0)) or 0)
     if values.get("rise_rate") not in (None, ""):
         latest_sensor_data[device_id]["rise_rate"] = float(values.get("rise_rate") or 0)
     else:
@@ -1491,10 +1866,10 @@ def retrain():
                             "sources": source_meta}), 200
 
         from sklearn.ensemble import RandomForestClassifier
-        features = ["total_rain", "water_level", "flow_rate",
-                    "rain_3h", "rise_rate", "month"]
-        X = df[features]
-        y = df["flooded"].astype(int)
+        balanced_df, balanced_counts = balance_training_dataframe(df)
+        balanced_df = ensure_pagasa_feature_columns(balanced_df)
+        X = balanced_df[TRAINING_FEATURE_COLUMNS]
+        y = balanced_df["flooded"].astype(int)
 
         clf = RandomForestClassifier(
             n_estimators=200,
@@ -1509,13 +1884,17 @@ def retrain():
         invalidate_training_status_cache()
         invalidate_actual_vs_predicted_cache()
 
-        msg = f"✅ Retrained on {len(df)} training rows — class counts: {class_counts}"
+        msg = (
+            f"✅ Retrained on {len(balanced_df)} balanced training rows "
+            f"(source rows: {len(df)}) — class counts: {class_counts}"
+        )
         print(msg)
         return jsonify({
             "status": "success",
             "message": msg,
-            "rows": len(df),
+            "rows": len(balanced_df),
             "class_counts": class_counts,
+            "balanced_class_counts": balanced_counts,
             "sources": source_meta
         }), 200
 
@@ -1665,11 +2044,22 @@ def compute_actual_vs_predicted_payload():
                     actual_value = int(bootstrap_label_from_features(future_row.to_dict()))
 
                 predicted_additional_rain = rainfall_rate_per_hour * horizon_hours
+                target_weather = pagasa_weather_features_for_timestamp(target_time)
                 predicted_features = {
                     "total_rain": float(row.get("total_rain") or 0) + predicted_additional_rain,
                     "water_level": float(row.get("water_level") or 0) + max(0.0, predicted_additional_rain * 0.4),
                     "flow_rate": float(row.get("flow_rate") or 0),
+                    "rain_30m": float(row.get("rain_30m") or 0) + predicted_additional_rain,
+                    "rain_1h": float(row.get("rain_1h") or 0) + predicted_additional_rain,
                     "rain_3h": float(row.get("rain_3h") or 0) + predicted_additional_rain,
+                    "wl_change_10m": float(row.get("wl_change_10m") or 0) + max(0.0, predicted_additional_rain * 0.2),
+                    "wl_change_30m": float(row.get("wl_change_30m") or 0) + max(0.0, predicted_additional_rain * 0.4),
+                    "wl_avg_1h": (float(row.get("wl_avg_1h", row.get("water_level", 0)) or 0) + float(row.get("water_level") or 0) + max(0.0, predicted_additional_rain * 0.4)) / 2.0,
+                    "flow_avg_1h": float(row.get("flow_avg_1h", row.get("flow_rate", 0)) or 0),
+                    "pagasa_daily_rain": float(target_weather.get("pagasa_daily_rain") or 0),
+                    "pagasa_tmax": float(target_weather.get("pagasa_tmax") or 0),
+                    "pagasa_tmin": float(target_weather.get("pagasa_tmin") or 0),
+                    "pagasa_rh": float(target_weather.get("pagasa_rh") or 0),
                     "rise_rate": float(row.get("rise_rate") or 0) + (predicted_additional_rain * 0.1),
                     "month": month,
                 }
