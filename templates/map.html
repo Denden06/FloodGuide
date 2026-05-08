@@ -57,6 +57,8 @@
     .rs-safe{background:#22c55e20;color:#22c55e}.rs-caut{background:#f59e0b20;color:#f59e0b}.rs-avoid{background:#ef444420;color:#ef4444}.rs-info{background:#38bdf820;color:#38bdf8}
     .route-empty{text-align:center;padding:1.5rem 0;color:#475569;font-size:.73rem}
     .sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:.45rem;margin-bottom:.85rem}
+    .manual-sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:.45rem;margin-bottom:.7rem}
+    .manual-sim-grid .finput{margin-bottom:0}
     .sim-btn{padding:.52rem;border:1px solid;border-radius:7px;font-size:.73rem;font-weight:700;cursor:pointer;text-align:center;font-family:inherit;background:transparent;transition:all .15s}
     .sbl{border-color:#22c55e60;color:#22c55e}.sbl:hover{background:#22c55e20}
     .sbm{border-color:#f59e0b60;color:#f59e0b}.sbm:hover{background:#f59e0b20}
@@ -138,10 +140,20 @@
   </div>
   <input id="simulationDeviceId" class="finput" type="text" placeholder="Optional device ID, e.g. sim_demo_april29">
   <div class="sim-help">If both bridges are selected and you enter one device ID, the app will save two rows using `_bridge1` and `_bridge2` suffixes.</div>
+  <div class="sel-lbl">Manual Sensor Values</div>
+  <div class="manual-sim-grid">
+    <input id="customRainfall" class="finput" type="number" step="0.01" min="0" placeholder="Rainfall now (mm)">
+    <input id="customWaterLevel" class="finput" type="number" step="0.01" min="0" placeholder="Water level (cm)">
+    <input id="customFlowRate" class="finput" type="number" step="0.01" min="0" placeholder="Flow rate (L)">
+    <input id="customRain3h" class="finput" type="number" step="0.01" min="0" placeholder="Rainfall 3h (mm)">
+    <input id="customRiseRate" class="finput" type="number" step="0.01" placeholder="Rise rate (cm/reading)" style="grid-column:1/-1">
+  </div>
+  <div class="sim-help">Use these if you want to enter custom readings yourself. Leave 3-hour rain blank to reuse current rainfall, and leave rise rate blank to default to 0.</div>
   <div class="sim-grid">
     <button class="sim-btn sbl" onclick="simulate('low')">Low Risk</button>
     <button class="sim-btn sbm" onclick="simulate('moderate')">Moderate</button>
     <button class="sim-btn sbh" onclick="simulate('high')">High Risk</button>
+    <button class="sim-btn" style="border-color:#38bdf860;color:#38bdf8;grid-column:1/-1" onclick="applyCustomSimulation()">Apply Custom Values</button>
     <button class="sim-btn sbr" onclick="simulate('reset','both')">Reset to Live Data</button>
   </div>
   <div class="sim-status" id="simStatus"></div>
@@ -863,11 +875,18 @@ async function simulate(level, forcedTarget=null){
   const target = forcedTarget || document.getElementById('simTarget').value;
   const saveToDb = !!document.getElementById('saveSimulationToDb').checked;
   const deviceId = document.getElementById('simulationDeviceId').value.trim();
+  const customValues = level === 'custom' ? {
+    rainfall: document.getElementById('customRainfall').value,
+    water_level: document.getElementById('customWaterLevel').value,
+    flow_rate: document.getElementById('customFlowRate').value,
+    rain_3h: document.getElementById('customRain3h').value,
+    rise_rate: document.getElementById('customRiseRate').value
+  } : null;
   try{
     const res = await fetch('/api/simulate',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({level,target,saveToDb,deviceId})
+      body:JSON.stringify({level,target,saveToDb,deviceId,customValues})
     });
     const data = await res.json();
     if(!res.ok || data.error){
@@ -878,6 +897,8 @@ async function simulate(level, forcedTarget=null){
       moderate:['#f59e0b20','#f59e0b'],
       high:['#ef444420','#ef4444']
     };
+    const toneKey = (data.resolved_level || level || 'low').replace('custom:','');
+    const tone = colors[toneKey] || ['#38bdf820','#38bdf8'];
     if(level === 'reset'){
       banner.classList.remove('visible');
       status.className = 'sim-status show';
@@ -887,7 +908,7 @@ async function simulate(level, forcedTarget=null){
       banner.classList.add('visible');
       banner.textContent = 'SIMULATION ACTIVE ON ' + simulationTargetLabel(target).toUpperCase() + ' - Click to reset';
       status.className = 'sim-status show';
-      status.style.cssText = 'background:' + colors[level][0] + ';color:' + colors[level][1];
+      status.style.cssText = 'background:' + tone[0] + ';color:' + tone[1];
       status.textContent = data.message || ('Simulating ' + level.toUpperCase() + ' flood risk on ' + simulationTargetLabel(target));
     }
     setTimeout(loadMapData,600);
@@ -897,6 +918,10 @@ async function simulate(level, forcedTarget=null){
     status.style.cssText = 'background:#ef444420;color:#ef4444';
     status.textContent = 'Error: ' + e.message;
   }
+}
+
+function applyCustomSimulation(){
+  simulate('custom');
 }
 
 async function loadHistoricalEvents(){

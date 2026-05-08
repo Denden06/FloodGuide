@@ -144,6 +144,15 @@
     .comparison-hero .sub{font-size:.62rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-top:.2rem}
     .comparison-hero .meta{font-size:.68rem;color:#94a3b8;line-height:1.55;margin-top:.35rem}
     .comparison-block-title{font-size:.78rem;font-weight:600;color:#e2e8f0;margin:.25rem 0 .5rem}
+    .comparison-chart-wrap{position:relative;height:240px;margin-bottom:.75rem}
+    .comparison-pages{display:flex;gap:.65rem;flex-wrap:wrap;align-items:center;margin-bottom:.85rem}
+    .page-select-wrap{display:flex;align-items:center;gap:.55rem}
+    .page-select-label{font-size:.68rem;color:#94a3b8;font-weight:600}
+    .page-select{background:#0a0f1e;border:1px solid #334155;color:#e2e8f0;border-radius:10px;padding:.5rem .8rem;font-size:.68rem;font-weight:600;min-width:170px}
+    .comparison-metrics{display:flex;gap:.55rem;flex-wrap:wrap;margin-bottom:.75rem}
+    .comparison-metric{background:#0a0f1e;border:1px solid #1e293b;border-radius:8px;padding:.55rem .8rem;min-width:110px}
+    .comparison-metric .k{font-size:.58rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em}
+    .comparison-metric .v{font-size:1rem;color:#e2e8f0;font-weight:700;margin-top:.12rem}
     .match-yes{color:#22c55e;font-weight:700}
     .match-no{color:#ef4444;font-weight:700}
     .btn-row{display:flex;gap:.6rem;flex-wrap:wrap}
@@ -461,12 +470,104 @@ buildChart('chartRain1','Rainfall (mm)','#818cf8');
 buildChart('chartWL2','Water Level (cm)','#06b6d4');
 buildChart('chartRain2','Rainfall (mm)','#a78bfa');
 
+let avpChart=null;
+let avpGraphRows=[];
+let avpPage=0;
+
 function updateChart(id,labels,values){
   const c=charts[id];
   if(!c) return;
   c.data.labels=labels;
   c.data.datasets[0].data=values;
   c.update('none');
+}
+
+function ensureAvpChart(){
+  const canvas=document.getElementById('chartActualVsPredicted');
+  if(!canvas) return null;
+  if(avpChart) return avpChart;
+  avpChart=new Chart(canvas.getContext('2d'),{
+    type:'line',
+    data:{
+      labels:[],
+        datasets:[
+          {
+            label:'Actual',
+            data:[],
+            borderColor:'#3b82f6',
+            backgroundColor:'#3b82f618',
+            pointBackgroundColor:'#3b82f6',
+            pointRadius:1.5,
+            pointHoverRadius:4,
+            borderWidth:2,
+            tension:.15,
+            fill:false
+          },
+          {
+            label:'Predicted',
+            data:[],
+            borderColor:'#f97316',
+            backgroundColor:'#f9731618',
+            pointBackgroundColor:'#f97316',
+            pointRadius:1.5,
+            pointHoverRadius:4,
+            borderWidth:2,
+            tension:.15,
+            fill:false
+          }
+        ]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        interaction:{mode:'index',intersect:false},
+        plugins:{
+          title:{
+            display:true,
+            text:'Actual vs Predicted Water Level (100-reading window)',
+            color:'#e2e8f0',
+            font:{size:13,weight:'600'},
+            padding:{bottom:12}
+          },
+          legend:{labels:{color:'#94a3b8'}},
+          tooltip:{
+            backgroundColor:'#0f172a',
+          borderColor:'#1e293b',
+          borderWidth:1,
+          titleColor:'#e2e8f0',
+          bodyColor:'#94a3b8'
+        }
+        },
+      scales:{
+        x:{ticks:{color:'#334155',font:{size:9},maxTicksLimit:10,maxRotation:30},grid:{color:'#1e293b'},border:{color:'transparent'}},
+        y:{
+          ticks:{
+            color:'#334155',
+            callback:(value)=>`${value} cm`
+          },
+          grid:{color:'#1e293b'},
+          border:{color:'transparent'},
+          title:{display:true,text:'Water level (cm)',color:'#94a3b8',font:{size:11,weight:'600'}}
+        }
+      }
+    }
+  });
+  return avpChart;
+}
+
+function renderAvpGraphPage(page){
+  if(!avpGraphRows.length) return;
+  const start=page*100;
+  const slice=avpGraphRows.slice(start,start+100);
+  avpPage=page;
+  const chart=ensureAvpChart();
+  if(chart){
+    chart.data.labels=slice.map((row,idx)=>`${start+idx} • ${fmtTs(row.prediction_time)} ${String(row.horizon||'').toUpperCase()}`);
+    chart.data.datasets[0].data=slice.map(row=>Number(row.actual_water_level ?? row.actual_value ?? 0));
+    chart.data.datasets[1].data=slice.map(row=>Number(row.predicted_water_level ?? row.predicted_value ?? 0));
+    chart.update('none');
+  }
+  const pageSelect=document.getElementById('avpPageSelect');
+  if(pageSelect) pageSelect.value=String(page);
 }
 
 // ── RISK HELPERS ─────────────────────────────────────────────────────────
@@ -681,12 +782,19 @@ function renderActualVsPredicted(data){
   const content=document.getElementById('actualVsPredictedContent');
   if(!content) return;
 
-  const rows=Array.isArray(data.rows)?data.rows:[];
-  const horizon1=data.horizons&&data.horizons['1h']?data.horizons['1h']:{};
-  const horizon3=data.horizons&&data.horizons['3h']?data.horizons['3h']:{};
-  const classCounts=data.class_counts||{};
-  const predictionCounts=data.prediction_counts||{};
-  const correctByClass=data.correct_by_class||{};
+  const rows=Array.isArray(data.rows)?data.rows:[]; 
+  avpGraphRows=Array.isArray(data.graph_rows)&&data.graph_rows.length?data.graph_rows:rows;
+  avpPage=0;
+  if(avpChart){
+    avpChart.destroy();
+    avpChart=null;
+  }
+  const horizon1=data.horizons&&data.horizons['1h']?data.horizons['1h']:{}; 
+  const horizon3=data.horizons&&data.horizons['3h']?data.horizons['3h']:{}; 
+  const wlStats=data.water_level_stats||{};
+  const classCounts=data.class_counts||{}; 
+  const predictionCounts=data.prediction_counts||{}; 
+  const correctByClass=data.correct_by_class||{}; 
   const wrongByClass=data.wrong_by_class||{};
   const accuracy=data.accuracy!=null?data.accuracy:'—';
   const balanced=data.balanced_accuracy!=null?data.balanced_accuracy:'n/a';
@@ -719,6 +827,26 @@ function renderActualVsPredicted(data){
   }
 
   html +=
+    '<div class="comparison-block-title">Prediction Trend Graph</div>'+
+    '<div class="comparison-pages">'+
+      '<div class="page-select-wrap">'+
+        '<label class="page-select-label" for="avpPageSelect">Pages</label>'+
+        '<select id="avpPageSelect" class="page-select" onchange="renderAvpGraphPage(Number(this.value))">'+
+          Array.from({length: Math.max(1, Math.ceil(avpGraphRows.length / 100))}, (_, pageIndex)=>{
+            const start = pageIndex * 100;
+            const end = Math.min(start + 100, avpGraphRows.length);
+            return '<option value="'+pageIndex+'">'+start+'-'+end+'</option>';
+          }).join('')+
+        '</select>'+
+      '</div>'+
+    '</div>'+
+    '<div class="comparison-metrics">'+
+      '<div class="comparison-metric"><div class="k">MAE</div><div class="v">'+(wlStats.mae!=null?wlStats.mae:'—')+'</div></div>'+
+      '<div class="comparison-metric"><div class="k">MSE</div><div class="v">'+(wlStats.mse!=null?wlStats.mse:'—')+'</div></div>'+
+      '<div class="comparison-metric"><div class="k">RMSE</div><div class="v">'+(wlStats.rmse!=null?wlStats.rmse:'—')+'</div></div>'+
+      '<div class="comparison-metric"><div class="k">R²</div><div class="v">'+(wlStats.r2!=null?wlStats.r2:'—')+'</div></div>'+
+    '</div>'+
+    '<div class="comparison-chart-wrap"><canvas id="chartActualVsPredicted"></canvas></div>'+
     '<div class="comparison-block-title">Correct Predictions</div>'+
     '<div class="comparison-grid">'+
       '<div class="comparison-stat"><div class="comparison-value" style="color:#22c55e">'+(correctByClass.low_correct||0)+'</div><div class="comparison-label">Low ✓</div></div>'+
@@ -754,6 +882,7 @@ function renderActualVsPredicted(data){
     '</div>';
 
   content.innerHTML=html;
+  renderAvpGraphPage(0);
 }
 
 async function loadActualVsPredicted(){
