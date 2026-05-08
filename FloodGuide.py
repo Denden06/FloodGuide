@@ -1,7 +1,7 @@
 from flask import Flask, render_template, jsonify, request
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import mysql.connector
 import joblib
 import os
@@ -189,14 +189,25 @@ def prepare_feature_frame(df):
 
     work = work.sort_values(sort_cols).reset_index(drop=True)
 
-    if "device_id" in work.columns:
-        work["rain_3h"] = work.groupby("device_id")["total_rain"].transform(
-            lambda s: s.rolling(window=RAIN_3H_WINDOW_READINGS, min_periods=1).sum()
+    def apply_time_features(group):
+        ordered = group.sort_values(sort_cols).copy()
+        ordered["timestamp"] = pd.to_datetime(ordered["timestamp"])
+        ordered["rain_3h"] = (
+            ordered.set_index("timestamp")["total_rain"]
+            .rolling("3h", min_periods=1)
+            .sum()
+            .to_numpy()
         )
-        work["rise_rate"] = work.groupby("device_id")["water_level"].diff().fillna(0)
+        ordered["rise_rate"] = ordered["water_level"].diff().fillna(0)
+        return ordered
+
+    if "device_id" in work.columns:
+        work = pd.concat(
+            [apply_time_features(group) for _, group in work.groupby("device_id", sort=False)],
+            ignore_index=True
+        )
     else:
-        work["rain_3h"] = work["total_rain"].rolling(window=RAIN_3H_WINDOW_READINGS, min_periods=1).sum()
-        work["rise_rate"] = work["water_level"].diff().fillna(0)
+        work = apply_time_features(work)
 
     work["month"] = work["timestamp"].dt.month
 
@@ -749,15 +760,17 @@ def get_recent_readings(device_id, n=RAIN_3H_WINDOW_READINGS):
     try:
         conn   = get_db_connection()
         cursor = conn.cursor(dictionary=True)
+        cutoff = datetime.now() - timedelta(hours=6)
         cursor.execute(
-            "SELECT total_rain, water_level, flow_rate FROM sensor_readings "
-            "WHERE device_id = %s ORDER BY timestamp DESC LIMIT %s",
-            (device_id, n)
+            "SELECT id, timestamp, total_rain, water_level, flow_rate FROM sensor_readings "
+            "WHERE device_id = %s AND timestamp >= %s ORDER BY timestamp ASC, id ASC",
+            (device_id, cutoff)
         )
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
-        rows.reverse()
+        if not rows:
+            return []
         return rows
     except Exception as e:
         print(f"⚠️ Could not fetch readings for {device_id}: {e}")
@@ -935,11 +948,11 @@ def get_predictions(device_id, forecast_1h, forecast_3h, clf):
     if using_demo_state():
         rain_3h = max(float(sensor.get("rain_3h", 0) or 0), float(sensor.get("rainfall", 0) or 0))
         rise_rate = float(sensor.get("rise_rate", 0) or 0)
-    elif len(history) >= 2:
-        rain_values  = [r["total_rain"]  for r in history]
-        water_values = [r["water_level"] for r in history]
-        rain_3h   = sum(rain_values[-RAIN_3H_WINDOW_READINGS:]) if len(rain_values) >= RAIN_3H_WINDOW_READINGS else sum(rain_values)
-        rise_rate = water_values[-1] - water_values[-2]
+    elif history:
+        history_frame = prepare_feature_frame(pd.DataFrame(history))
+        latest_history = history_frame.iloc[-1]
+        rain_3h = float(latest_history.get("rain_3h", sensor.get("rainfall", 0)) or 0)
+        rise_rate = float(latest_history.get("rise_rate", 0) or 0)
     else:
         rain_3h   = sensor["rainfall"]
         rise_rate = 0.0
@@ -1306,9 +1319,39 @@ def apply_simulation_values(device_id, values, level):
     latest_sensor_data[device_id]["rainfall"] = float(values.get("rainfall") or 0)
     latest_sensor_data[device_id]["flow_rate"] = float(values.get("flow_rate") or 0)
     latest_sensor_data[device_id]["rain_3h"] = float(values.get("rain_3h", values.get("rainfall", 0)) or 0)
-    latest_sensor_data[device_id]["rise_rate"] = (
-        2.0 if level == "moderate" else (5.0 if level == "high" else 0.0)
-    )
+    if values.get("rise_rate") not in (None, ""):
+        latest_sensor_data[device_id]["rise_rate"] = float(values.get("rise_rate") or 0)
+    else:
+        latest_sensor_data[device_id]["rise_rate"] = (
+            2.0 if level == "moderate" else (5.0 if level == "high" else 0.0)
+        )
+
+
+def parse_custom_simulation_values(raw_values):
+    raw_values = raw_values or {}
+
+    def parse_number(name, default=0.0):
+        value = raw_values.get(name, default)
+        if value in (None, ""):
+            return default
+        return float(value)
+
+    rainfall = parse_number("rainfall", 0.0)
+    water_level = parse_number("water_level", 0.0)
+    flow_rate = parse_number("flow_rate", 0.0)
+    rain_3h = parse_number("rain_3h", rainfall)
+    rise_rate = parse_number("rise_rate", 0.0)
+
+    if rainfall < 0 or water_level < 0 or flow_rate < 0 or rain_3h < 0:
+        raise ValueError("Custom simulation values cannot be negative.")
+
+    return {
+        "rainfall": rainfall,
+        "water_level": water_level,
+        "flow_rate": flow_rate,
+        "rain_3h": rain_3h,
+        "rise_rate": rise_rate,
+    }
 
 
 def insert_sensor_reading(device_id, rainfall, water_level, flow_rate):
@@ -1550,7 +1593,13 @@ def dashboard():
     return render_template("dashboard.html")
 
 def compute_actual_vs_predicted_payload():
-    from sklearn.metrics import accuracy_score, balanced_accuracy_score
+    from sklearn.metrics import (
+        accuracy_score,
+        balanced_accuracy_score,
+        mean_absolute_error,
+        mean_squared_error,
+        r2_score,
+    )
 
     conn = get_db_connection()
     sensor_df = pd.read_sql(
@@ -1629,6 +1678,8 @@ def compute_actual_vs_predicted_payload():
                     "device_id": device_id,
                     "horizon": horizon_key,
                     "actual_value": actual_value,
+                    "actual_water_level": float(future_row.get("water_level") or 0),
+                    "predicted_water_level": float(predicted_features.get("water_level") or 0),
                     "prediction_time": base_time,
                     "actual_time": future_row["timestamp"],
                 })
@@ -1645,6 +1696,8 @@ def compute_actual_vs_predicted_payload():
         [job["features"] for job in comparison_jobs],
         clf
     )
+    actual_water_levels = []
+    predicted_water_levels = []
 
     for job, prediction in zip(comparison_jobs, batch_predictions):
         predicted_label, _, confidence = prediction
@@ -1662,11 +1715,17 @@ def compute_actual_vs_predicted_payload():
 
         actual_numeric.append(actual_value)
         predicted_numeric.append(predicted_value)
+        actual_water_levels.append(float(job["actual_water_level"]))
+        predicted_water_levels.append(float(job["predicted_water_level"]))
         scored_rows.append({
             "prediction_time": job["prediction_time"].isoformat() if hasattr(job["prediction_time"], "isoformat") else str(job["prediction_time"]),
             "actual_time": job["actual_time"].isoformat() if hasattr(job["actual_time"], "isoformat") else str(job["actual_time"]),
             "device_id": job["device_id"],
             "horizon": horizon_key,
+            "actual_value": actual_value,
+            "predicted_value": predicted_value,
+            "actual_water_level": round(float(job["actual_water_level"]), 2),
+            "predicted_water_level": round(float(job["predicted_water_level"]), 2),
             "actual": flood_label_text(actual_value),
             "predicted": flood_label_text(predicted_value),
             "confidence": round(float(confidence), 1),
@@ -1700,6 +1759,15 @@ def compute_actual_vs_predicted_payload():
     balanced = None
     if len(set(actual_numeric)) >= 2:
         balanced = round(float(balanced_accuracy_score(actual_numeric, predicted_numeric) * 100), 1)
+    water_level_stats = None
+    if actual_water_levels and predicted_water_levels:
+        mse_value = float(mean_squared_error(actual_water_levels, predicted_water_levels))
+        water_level_stats = {
+            "mae": round(float(mean_absolute_error(actual_water_levels, predicted_water_levels)), 3),
+            "mse": round(mse_value, 3),
+            "rmse": round(mse_value ** 0.5, 3),
+            "r2": round(float(r2_score(actual_water_levels, predicted_water_levels)), 3) if len(actual_water_levels) >= 2 else None,
+        }
 
     horizons = {}
     for key, values in horizon_stats.items():
@@ -1712,7 +1780,11 @@ def compute_actual_vs_predicted_payload():
             "pending": values["pending"],
         }
 
-    scored_rows.sort(key=lambda item: item["prediction_time"], reverse=True)
+    chronological_rows = sorted(
+        scored_rows,
+        key=lambda item: (item["prediction_time"], item["device_id"], item["horizon"])
+    )
+    recent_rows = list(reversed(chronological_rows))[:30]
 
     return {
         "setup_required": False,
@@ -1727,7 +1799,9 @@ def compute_actual_vs_predicted_payload():
         "correct_by_class": correct_by_class,
         "wrong_by_class": wrong_by_class,
         "horizons": horizons,
-        "rows": scored_rows[:30],
+        "rows": recent_rows,
+        "graph_rows": chronological_rows,
+        "water_level_stats": water_level_stats,
     }
 
 @app.route("/api/dashboard-data")
@@ -1858,9 +1932,10 @@ def simulate():
     target = str(data.get("target", "both")).lower()
     save_to_db = bool(data.get("saveToDb", False))
     custom_device_id = str(data.get("deviceId", "") or "").strip()
+    custom_values = data.get("customValues") or {}
 
-    if level not in SIMULATION_PRESETS:
-        return jsonify({"error": f"Invalid level. Choose: {list(SIMULATION_PRESETS.keys())}"}), 400
+    if level not in SIMULATION_PRESETS and level != "custom":
+        return jsonify({"error": f"Invalid level. Choose: {list(SIMULATION_PRESETS.keys()) + ['custom']}"}), 400
     if target not in (*SIMULATION_BRIDGE_IDS, "both"):
         return jsonify({"error": "Invalid target. Choose bridge1, bridge2, or both."}), 400
 
@@ -1885,25 +1960,37 @@ def simulate():
             "saved_rows": []
         })
 
-    preset = SIMULATION_PRESETS[level]
+    if level == "custom":
+        try:
+            custom_payload = parse_custom_simulation_values(custom_values)
+        except Exception as e:
+            return jsonify({"error": f"Invalid custom simulation values: {e}"}), 400
+        preset = {device_id: dict(custom_payload) for device_id in target_ids}
+        resolved_level, _, _ = rule_based_predict(custom_payload)
+        resolved_level_key = resolved_level.lower()
+    else:
+        preset = SIMULATION_PRESETS[level]
+        resolved_level_key = level
     applied = []
     saved_rows = []
 
     for device_id in target_ids:
         values = preset.get(device_id, {})
-        apply_simulation_values(device_id, values, level)
+        apply_simulation_values(device_id, values, resolved_level_key)
         applied.append({
             "bridge_id": device_id,
             "water_level": float(values.get("water_level") or 0),
             "rainfall": float(values.get("rainfall") or 0),
-            "flow_rate": float(values.get("flow_rate") or 0)
+            "flow_rate": float(values.get("flow_rate") or 0),
+            "rain_3h": float(values.get("rain_3h", values.get("rainfall", 0)) or 0),
+            "rise_rate": float(values.get("rise_rate") or 0)
         })
 
         if save_to_db:
             if custom_device_id:
                 db_device_id = custom_device_id if len(target_ids) == 1 else f"{custom_device_id}_{device_id}"
             else:
-                db_device_id = f"sim_{level}_{device_id}"
+                db_device_id = f"sim_{resolved_level_key}_{device_id}" if level == "custom" else f"sim_{level}_{device_id}"
             save_result = insert_sensor_reading(
                 db_device_id,
                 float(values.get("rainfall") or 0),
@@ -1917,7 +2004,7 @@ def simulate():
             })
 
     simulation_mode["active"] = True
-    simulation_mode["level"] = level
+    simulation_mode["level"] = level if level != "custom" else f"custom:{resolved_level_key}"
     simulation_mode["target"] = target
     simulation_mode["saved"] = save_to_db
     simulation_mode["saved_device_ids"] = [row["device_id"] for row in saved_rows if row.get("status") == "saved"]
@@ -1932,15 +2019,17 @@ def simulate():
         saved_ids = simulation_mode["saved_device_ids"]
         save_note = f" and saved to DB as {', '.join(saved_ids)}" if saved_ids else " and attempted to save to DB"
 
-    print(f"🎭 Simulation mode: level={level}, target={target}, save_to_db={save_to_db}")
+    display_level = level.upper() if level != "custom" else f"CUSTOM ({resolved_level_key.upper()})"
+    print(f"🎭 Simulation mode: level={display_level}, target={target}, save_to_db={save_to_db}")
     return jsonify({
         "status": "ok",
         "level": level,
+        "resolved_level": resolved_level_key,
         "target": target,
         "applied": applied,
         "save_to_db": save_to_db,
         "saved_rows": saved_rows,
-        "message": f"Simulating {level.upper()} flood risk on {target_label}{save_note}"
+        "message": f"Simulating {display_level} flood risk on {target_label}{save_note}"
     })
 
 @app.route("/api/simulation-status")
