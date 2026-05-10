@@ -1587,7 +1587,6 @@ def build_location_payload(loc, clf, timestamp):
             🌧 Rainfall (1h):  {preds['rain_1h']:.2f} mm<br>
             🌧 Rainfall (3h):  {preds['rain_3h']:.2f} mm<br>
             📏 Water Level:    {sensor['water_level']:.2f} cm<br>
-            📉 Water Level Change (10m): {preds['wl_change_10m']:.2f} cm<br>
             📈 Rise Rate:      {preds['rise_rate']:.2f} cm/reading<br>
             💧 Flow Rate:      {sensor['flow_rate']:.2f} L
         </div>
