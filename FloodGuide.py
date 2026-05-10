@@ -130,9 +130,14 @@ SIMULATION_BRIDGE_IDS = ("bridge1", "bridge2")
 prediction_audit_table_ready = False
 TRAINING_STATUS_CACHE_TTL = 300
 ACTUAL_VS_PREDICTED_CACHE_TTL = 300
+WEATHER_CACHE_TTL = 300
+LIVE_PAYLOAD_CACHE_TTL = 20
 training_status_cache = {"value": None, "expires_at": 0}
 actual_vs_predicted_cache = {"value": None, "expires_at": 0}
 pagasa_dataset_cache = {"path": None, "mtime": None, "labeled_df": None, "weather_df": None, "meta": None}
+model_cache = {"path": None, "mtime": None, "value": None}
+weather_cache = {}
+live_payload_cache = {"value": None, "expires_at": 0}
 
 MONITORED_SITES = [
     {"id": "bridge1", "name": "Mandaue-Mactan Bridge 1", "lat": 10.326490, "lng": 123.952142},
@@ -165,6 +170,11 @@ def invalidate_actual_vs_predicted_cache():
     actual_vs_predicted_cache["expires_at"] = 0
 
 
+def invalidate_live_payload_cache():
+    live_payload_cache["value"] = None
+    live_payload_cache["expires_at"] = 0
+
+
 def get_cached_training_mode_status(force=False):
     now = time.time()
     if (not force and training_status_cache["value"] is not None
@@ -194,18 +204,34 @@ def ping():
 # LOAD MODEL
 # =========================================
 def load_model():
-    if os.path.exists(MODEL_PATH):
-        try:
-            clf = joblib.load(MODEL_PATH)
-            if hasattr(clf, 'classes_') and len(clf.classes_) < 2:
-                print("⚠️ Model only has 1 class — using rule-based fallback.")
-                return None
-            return clf
-        except Exception as e:
-            print("❌ Error loading model:", e)
-            return None
-    else:
+    if not os.path.exists(MODEL_PATH):
         print("❌ model_class.pkl not found!")
+        model_cache["path"] = MODEL_PATH
+        model_cache["mtime"] = None
+        model_cache["value"] = None
+        return None
+
+    try:
+        mtime = os.path.getmtime(MODEL_PATH)
+        if (
+            model_cache["path"] == MODEL_PATH
+            and model_cache["mtime"] == mtime
+        ):
+            return model_cache["value"]
+
+        clf = joblib.load(MODEL_PATH)
+        if hasattr(clf, 'classes_') and len(clf.classes_) < 2:
+            print("⚠️ Model only has 1 class — using rule-based fallback.")
+            clf = None
+        model_cache["path"] = MODEL_PATH
+        model_cache["mtime"] = mtime
+        model_cache["value"] = clf
+        return clf
+    except Exception as e:
+        print("❌ Error loading model:", e)
+        model_cache["path"] = MODEL_PATH
+        model_cache["mtime"] = None
+        model_cache["value"] = None
         return None
 
 
@@ -1072,6 +1098,12 @@ def using_demo_state():
 #          next 3h rain estimate
 # =========================================
 def get_weather_data(lat, lng):
+    cache_key = f"{round(float(lat), 4)}:{round(float(lng), 4)}"
+    now = time.time()
+    cached = weather_cache.get(cache_key)
+    if cached and cached.get("expires_at", 0) > now:
+        return dict(cached["value"])
+
     result = {
         "temp":           28.0,
         "humidity":       70,
@@ -1106,6 +1138,10 @@ def get_weather_data(lat, lng):
     except Exception:
         pass
 
+    weather_cache[cache_key] = {
+        "value": dict(result),
+        "expires_at": now + WEATHER_CACHE_TTL
+    }
     return result
 
 # =========================================
@@ -1654,10 +1690,17 @@ def build_location_payload(loc, clf, timestamp):
 
 
 def get_live_location_payloads():
+    now = time.time()
+    if live_payload_cache["value"] is not None and live_payload_cache["expires_at"] > now:
+        return live_payload_cache["value"]
+
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     clf = load_model()
     payloads = [build_location_payload(loc, clf, timestamp) for loc in MONITORED_SITES]
-    return payloads, clf is not None
+    result = (payloads, clf is not None)
+    live_payload_cache["value"] = result
+    live_payload_cache["expires_at"] = now + LIVE_PAYLOAD_CACHE_TTL
+    return result
 
 
 def apply_sensor_row(device_id, row):
@@ -1887,6 +1930,7 @@ def retrain():
         )
         clf.fit(X, y)
         joblib.dump(clf, MODEL_PATH)
+        invalidate_live_payload_cache()
         invalidate_training_status_cache()
         invalidate_actual_vs_predicted_cache()
 
@@ -1913,6 +1957,7 @@ def retrain():
 def bootstrap_dataset():
     try:
         result = rebuild_bootstrap_dataset()
+        invalidate_live_payload_cache()
         invalidate_training_status_cache()
         invalidate_actual_vs_predicted_cache()
         status = get_cached_training_mode_status(force=True)
@@ -1959,6 +2004,8 @@ def receive_sensor():
     latest_sensor_data[device_id]["flow_rate"]   = flow_rate
 
     insert_sensor_reading(device_id, rainfall, water_level, flow_rate)
+    invalidate_live_payload_cache()
+    invalidate_actual_vs_predicted_cache()
 
     return jsonify({"status": "received", "device": device_id})
 
@@ -2210,20 +2257,15 @@ def dashboard_data():
 
         cursor.execute(
             "SELECT * FROM sensor_readings WHERE device_id = 'bridge1' "
-            "ORDER BY timestamp DESC LIMIT 50"
+            "ORDER BY timestamp DESC LIMIT 24"
         )
         bridge1 = list(reversed(cursor.fetchall()))
 
         cursor.execute(
             "SELECT * FROM sensor_readings WHERE device_id = 'bridge2' "
-            "ORDER BY timestamp DESC LIMIT 50"
+            "ORDER BY timestamp DESC LIMIT 24"
         )
         bridge2 = list(reversed(cursor.fetchall()))
-
-        cursor.execute(
-            "SELECT * FROM sensor_readings ORDER BY timestamp DESC LIMIT 20"
-        )
-        recent = cursor.fetchall()
 
         cursor.execute("""
             SELECT
@@ -2252,7 +2294,6 @@ def dashboard_data():
             "bridge1": serialize(bridge1),
             "bridge2": serialize(bridge2),
             "bridges": live_by_bridge,
-            "recent":  serialize(recent),
             "stats":   {k: (float(v) if v is not None else 0)
                         for k, v in stats.items()},
             "model": {
@@ -2344,6 +2385,8 @@ def simulate():
         simulation_mode["target"] = target
         simulation_mode["saved"] = False
         simulation_mode["saved_device_ids"] = []
+        invalidate_live_payload_cache()
+        invalidate_actual_vs_predicted_cache()
 
         target_label = "both bridges" if target == "both" else ("Bridge 1" if target == "bridge1" else "Bridge 2")
         return jsonify({
@@ -2404,6 +2447,9 @@ def simulate():
     simulation_mode["target"] = target
     simulation_mode["saved"] = save_to_db
     simulation_mode["saved_device_ids"] = [row["device_id"] for row in saved_rows if row.get("status") == "saved"]
+    invalidate_live_payload_cache()
+    if save_to_db:
+        invalidate_actual_vs_predicted_cache()
 
     target_label = {
         "bridge1": "Bridge 1",
@@ -2520,6 +2566,7 @@ def replay_event():
         simulation_mode["target"] = "both"
         simulation_mode["saved"] = False
         simulation_mode["saved_device_ids"] = []
+        invalidate_live_payload_cache()
 
         ts = event["timestamp"]
         if hasattr(ts, "isoformat"):
