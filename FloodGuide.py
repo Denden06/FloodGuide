@@ -1161,6 +1161,34 @@ def rule_based_predict(sensor_data):
     else:
         return "Low",      "green",  90.0
 
+
+RISK_LABEL_TO_INDEX = {"Low": 0, "Moderate": 1, "High": 2}
+
+
+def derive_history_severity(row):
+    """
+    Compute replay/history severity from the row's actual numeric values so the
+    history badge and replay marker color match the values being shown.
+    """
+    rainfall_now = float(row.get("total_rain", row.get("rainfall", 0)) or 0)
+    rainfall_3h = float(row.get("rain_3h", rainfall_now) or 0)
+    sensor_like = {
+        "rainfall": rainfall_now,
+        "water_level": float(row.get("water_level", 0) or 0),
+        "flow_rate": float(row.get("flow_rate", 0) or 0),
+        "rain_3h": rainfall_3h,
+        "rise_rate": float(row.get("rise_rate", 0) or 0),
+    }
+    risk_label, risk_color, confidence = rule_based_predict(sensor_like)
+    return {
+        "risk_label": risk_label,
+        "risk_color": risk_color,
+        "risk_conf": confidence,
+        "risk_index": RISK_LABEL_TO_INDEX[risk_label],
+        "rainfall_now": rainfall_now,
+        "rainfall_3h": rainfall_3h,
+    }
+
 # =========================================
 # CORE PREDICTION FUNCTION
 # Takes a feature dict, returns risk label
@@ -2489,17 +2517,22 @@ def historical_events():
         conn   = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # Get replayable Moderate/High events, prioritizing actual bridge rows.
+        # Pull likely flood-related rows, then keep only those whose numeric
+        # values still evaluate to Moderate/High in the current rules.
         cursor.execute("""
             SELECT
                 id, device_id, timestamp,
                 total_rain, water_level, flow_rate, flooded
             FROM sensor_readings
-            WHERE flooded >= 1
+            WHERE
+                flooded >= 1
+                OR water_level > 80
+                OR total_rain > 20
+                OR flow_rate > 3.0
             ORDER BY
                 CASE WHEN device_id IN ('bridge1', 'bridge2') THEN 0 ELSE 1 END,
                 timestamp DESC
-            LIMIT 50
+            LIMIT 200
         """)
         events = cursor.fetchall()
         cursor.close()
@@ -2508,10 +2541,18 @@ def historical_events():
         serialized = []
         for e in events:
             row = dict(e)
+            severity = derive_history_severity(row)
+            if severity["risk_index"] < 1:
+                continue
             if hasattr(row.get("timestamp"), "isoformat"):
                 row["timestamp"] = row["timestamp"].isoformat()
-            row["risk_label"] = ["Low", "Moderate", "High"][min(int(row["flooded"]), 2)]
+            row["flooded"] = severity["risk_index"]
+            row["risk_label"] = severity["risk_label"]
+            row["risk_color"] = severity["risk_color"]
+            row["stored_flooded"] = int(e.get("flooded") or 0) if e.get("flooded") is not None else 0
             serialized.append(row)
+            if len(serialized) >= 50:
+                break
 
         return jsonify({"events": serialized, "count": len(serialized)})
 
@@ -2544,12 +2585,15 @@ def replay_event():
             conn.close()
             return jsonify({"error": "Event not found"}), 404
 
+        severity = derive_history_severity(event)
+
         # Replay the selected event into both bridge markers so the map visibly
         # reflects the chosen Moderate / High history item.
         replay_rows = []
         for bridge_id in latest_sensor_data:
             replay_row = dict(event)
             replay_row["device_id"] = bridge_id
+            replay_row["flooded"] = severity["risk_index"]
             apply_sensor_row(bridge_id, replay_row)
             replay_rows.append({
                 "device_id": bridge_id,
@@ -2558,7 +2602,9 @@ def replay_event():
                 "water_level": float(replay_row["water_level"] or 0),
                 "total_rain": float(replay_row["total_rain"] or 0),
                 "flow_rate": float(replay_row["flow_rate"] or 0),
-                "flooded": int(replay_row["flooded"] or 0) if replay_row.get("flooded") is not None else 0
+                "flooded": severity["risk_index"],
+                "risk_label": severity["risk_label"],
+                "risk_color": severity["risk_color"],
             })
 
         simulation_mode["active"] = True
@@ -2582,7 +2628,9 @@ def replay_event():
             "water_level": float(event["water_level"] or 0),
             "total_rain":  float(event["total_rain"]  or 0),
             "flow_rate":   float(event["flow_rate"]   or 0),
-            "flooded":     int(event["flooded"]       or 0),
+            "flooded":     severity["risk_index"],
+            "risk_label":  severity["risk_label"],
+            "risk_color":  severity["risk_color"],
             "replayed":    replay_rows,
         })
 
