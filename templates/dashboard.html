@@ -955,7 +955,11 @@ async function loadDashboard(){
 }
 
 loadDashboard();
-loadActualVsPredicted();
+if('requestIdleCallback' in window){
+  requestIdleCallback(()=>loadActualVsPredicted(), {timeout: 1500});
+}else{
+  setTimeout(loadActualVsPredicted, 400);
+}
 setInterval(loadDashboard,30000);
 </script>
 </body>
