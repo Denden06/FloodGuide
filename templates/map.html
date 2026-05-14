@@ -54,8 +54,21 @@
     .route-actions{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin-top:.45rem}
     .route-open{border:none;border-radius:6px;padding:.38rem .7rem;font-size:.68rem;font-weight:700;cursor:pointer;background:#22c55e;color:#0f172a}
     .rs{display:inline-block;font-size:.57rem;font-weight:700;padding:.07rem .38rem;border-radius:4px}
-    .rs-safe{background:#22c55e20;color:#22c55e}.rs-caut{background:#f59e0b20;color:#f59e0b}.rs-avoid{background:#ef444420;color:#ef4444}.rs-info{background:#38bdf820;color:#38bdf8}
+    .rs-safe{background:#22c55e20;color:#22c55e}.rs-avoid{background:#ef444420;color:#ef4444}.rs-info{background:#38bdf820;color:#38bdf8}
     .route-empty{text-align:center;padding:1.5rem 0;color:#475569;font-size:.73rem}
+    .route-preview-overlay{position:fixed;inset:0;background:rgba(3,7,18,.78);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;z-index:10020;padding:1rem}
+    .route-preview-overlay.open{display:flex}
+    .route-preview-card{width:min(900px,96vw);max-height:92vh;background:#0f172a;border:1px solid #334155;border-radius:16px;box-shadow:0 18px 48px rgba(0,0,0,.5);overflow:hidden;display:flex;flex-direction:column}
+    .route-preview-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;padding:1rem 1.1rem;border-bottom:1px solid #1e293b}
+    .route-preview-title{font-size:1rem;font-weight:700;color:#e2e8f0}
+    .route-preview-copy{font-size:.72rem;color:#94a3b8;line-height:1.5;margin-top:.25rem}
+    .route-preview-close{cursor:pointer;color:#64748b;font-size:1.3rem;line-height:1;padding:.2rem .25rem}
+    .route-preview-close:hover{color:#e2e8f0}
+    .route-preview-image-wrap{padding:1rem;background:#0a0f1e}
+    .route-preview-image{width:100%;max-height:min(62vh,520px);object-fit:contain;display:block;border-radius:14px;border:1px solid #1e293b;background:#0f172a}
+    .route-preview-missing{display:none;margin:0 1rem 1rem;padding:.9rem 1rem;border-radius:12px;background:#0f172a;border:1px solid #334155;color:#94a3b8;font-size:.78rem;line-height:1.55}
+    .route-preview-meta{display:flex;gap:.5rem;flex-wrap:wrap;padding:0 1rem 1rem}
+    .route-preview-meta .rs{font-size:.62rem;padding:.12rem .5rem}
     .sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:.45rem;margin-bottom:.85rem}
     .manual-sim-grid{display:grid;grid-template-columns:1fr 1fr;gap:.45rem;margin-bottom:.7rem}
     .manual-sim-grid .finput{margin-bottom:0}
@@ -89,15 +102,24 @@
     <div class="live-indicator"><div class="live-dot"></div>Live</div>
   </div>
   <div class="topbar-right">
-    <a href="/" class="nav-btn active">Map</a>
+    <a href="{{ '/admin' if admin_mode else '/' }}" class="nav-btn active">Map</a>
+    {% if admin_mode %}
     <a href="/dashboard" class="nav-btn">Dashboard</a>
+    {% endif %}
     <button class="nav-btn btn-route" onclick="togglePanel('routePanel')">Routes</button>
+    {% if admin_mode %}
     <button class="nav-btn btn-sim" onclick="togglePanel('simPanel')">Simulate</button>
     <button class="nav-btn btn-hist" onclick="togglePanel('histPanel')">History</button>
+    <a href="/admin/logout" class="nav-btn">Logout</a>
+    {% else %}
+    <a href="{{ '/admin' if admin_logged_in else '/admin/login' }}" class="nav-btn">{{ 'Admin Panel' if admin_logged_in else 'Admin Login' }}</a>
+    {% endif %}
   </div>
 </div>
 
+{% if admin_mode %}
 <div class="sim-banner" id="simBanner" onclick="simulate('reset','both')">SIMULATION ACTIVE - Click to reset</div>
+{% endif %}
 <div id="map"></div>
 
 <div id="legend">
@@ -109,7 +131,7 @@
 
 <div class="side-panel" id="routePanel">
   <div class="panel-header"><div class="panel-title">Safe Route Planner</div><span class="panel-close" onclick="closePanel('routePanel')">X</span></div>
-  <p class="intro-txt">Choose whether route links should open from your live GPS location or from the fixed route starting points. Bridge 1 and Bridge 2 stay as the main recommendations unless both bridges are flooded.</p>
+  <p class="intro-txt">Pick a route and view its preview inside FloodGuide. The route planner now uses the fixed starting points by default and keeps the route labels simple: Safe to Use or Avoid - Flooded.</p>
   <div class="sel-lbl">Travel Direction</div>
   <select id="routeDirection" class="fsel" onchange="updateRoutePlannerCopy(); if(currentRecommendation){planRoute();}">
     <option value="mandaue_to_lapu">Mandaue to Lapu-Lapu</option>
@@ -117,14 +139,29 @@
   </select>
   <div class="infobox" id="routeLogicNote" style="margin-bottom:.7rem"></div>
   <button class="act-btn btn-blue" onclick="planRoute()">Show Recommended Route</button>
-  <button class="act-btn btn-grey" onclick="requestCurrentLocation(true)">Use My Current Location</button>
-  <button class="act-btn btn-grey" onclick="useFixedRouteStart()">Use Fixed Starting Point</button>
   <button class="act-btn btn-grey" onclick="clearRoutes()">Clear Routes</button>
-  <div class="infobox" id="routeEngineNote">Route handoff: Google Maps directions links use either your chosen live GPS origin or the configured route starting point, then continue through the selected route waypoints and destination.</div>
-  <div class="infobox" id="routeGpsNote" style="margin-top:.55rem">GPS mode: fixed route starting points.</div>
+  <div class="infobox" id="routeEngineNote">Route preview mode: each option opens an in-app route image built from the configured start, waypoint, and destination points.</div>
   <div id="routeResults"><div class="route-empty">Tap Show Recommended Route to apply the live bridge routing logic.</div></div>
 </div>
 
+<div class="route-preview-overlay" id="routePreviewOverlay" onclick="closeRoutePreview(event)">
+  <div class="route-preview-card" onclick="event.stopPropagation()">
+    <div class="route-preview-head">
+      <div>
+        <div class="route-preview-title" id="routePreviewTitle">Route Preview</div>
+        <div class="route-preview-copy" id="routePreviewCopy">Route image preview.</div>
+      </div>
+      <span class="route-preview-close" onclick="closeRoutePreview()">X</span>
+    </div>
+    <div class="route-preview-image-wrap">
+      <img id="routePreviewImage" class="route-preview-image" alt="Route preview image">
+    </div>
+    <div class="route-preview-missing" id="routePreviewMissing"></div>
+    <div class="route-preview-meta" id="routePreviewMeta"></div>
+  </div>
+</div>
+
+{% if admin_mode %}
 <div class="side-panel" id="simPanel">
   <div class="panel-header"><div class="panel-title">Simulate Flood Conditions</div><span class="panel-close" onclick="closePanel('simPanel')">X</span></div>
   <p class="intro-txt">Choose whether Bridge 1, Bridge 2, or both will use Low, Moderate, or High simulated values. You can also save the simulated reading into the database under a custom device ID.</p>
@@ -174,11 +211,13 @@
   <p class="intro-txt">Past Moderate and High risk readings. Replaying an event now applies that event severity to both bridge markers so Moderate and High replays visibly change the map.</p>
   <div class="hist-list" id="histList"><div class="hist-empty">Loading...</div></div>
 </div>
+{% endif %}
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/leaflet-routing-machine.min.js"></script>
 <script>
 const GOOGLE_MAPS_API_KEY = {{ google_maps_api_key|tojson }};
+const ADMIN_MODE = {{ admin_mode|tojson }};
 const map = L.map('map',{zoomControl:true}).setView([10.315,123.960],13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OpenStreetMap'}).addTo(map);
 
@@ -207,77 +246,92 @@ const ROUTE_ENDPOINTS = {
   bridge1_mandaue_start:{
     label:'Shell, A. C. Cortes Ave, Cambaro',
     address:'Shell, A. C. Cortes Ave, Cambaro, Mandaue City, Cebu',
-    query:'8XH2+58 Mandaue, Cebu'
+    query:'8XH2+58 Mandaue, Cebu',
+    coords:[10.3292,123.9512]
   },
   bridge1_lapu_end:{
     label:'Nagali Building II, Lapu-Lapu',
     address:'Nagali Building II, Lapu-Lapu City, Cebu',
-    query:'Nagali Building II, Lapu-Lapu City, Cebu, Philippines'
+    query:'Nagali Building II, Lapu-Lapu City, Cebu, Philippines',
+    coords:[10.3224,123.9576]
   },
   bridge1_lapu_return_start:{
     label:'Pajo terminal habal habal station',
     address:'Pajo terminal habal habal station, Lapu-Lapu City, Cebu',
-    query:'Pajo terminal habal habal station, Lapu-Lapu City, Cebu'
+    query:'Pajo terminal habal habal station, Lapu-Lapu City, Cebu',
+    coords:[10.3218,123.9582]
   },
   serging_veloso_bridge:{
     label:'Serging Veloso Osmena Jr. Brg',
     address:'Serging Veloso Osmena Jr. Brg, Mandaue City, Cebu',
-    query:'Serging Veloso Osmena Jr. Brg, Mandaue City, Cebu'
+    query:'Serging Veloso Osmena Jr. Brg, Mandaue City, Cebu',
+    coords:[10.3257,123.9544]
   },
   philippine_spring:{
     label:'Philippine Spring Water Resources, Inc.',
     address:'Philippine Spring Water Resources, Inc., A. C. Cortes Ave, Cambaro, Mandaue City, Cebu',
-    query:'Philippine Spring Water Resources, Inc., A. C. Cortes Ave, Cambaro, Mandaue City, Cebu'
+    query:'Philippine Spring Water Resources, Inc., A. C. Cortes Ave, Cambaro, Mandaue City, Cebu',
+    coords:[10.3290,123.9510]
   },
   cclex_bridge1_start:{
     label:'A. C. Cortes Ave, Mandaue',
     address:'6014 A. C. Cortes Ave, Mandaue City, Cebu',
-    query:'6014 A. C. Cortes Ave, Mandaue City, Cebu'
+    query:'6014 A. C. Cortes Ave, Mandaue City, Cebu',
+    coords:[10.3296,123.9510]
   },
   bridge2_mandaue_start:{
     label:'Wilcon Depot, U.N. Ave, Umapad',
     address:'Wilcon Depot, U.N. Ave, Barangay Umapad, Mandaue City, Cebu',
-    query:'8XP5+4W Mandaue, Cebu'
+    query:'8XP5+4W Mandaue, Cebu',
+    coords:[10.3382,123.9581]
   },
   bridge2_lapu_end:{
     label:'Shell, M.L. Quezon National Highway',
     address:'Shell, M.L. Quezon National Highway, Lapu-Lapu City, Cebu',
-    query:'8XFF+F5 Lapu-Lapu, Cebu'
+    query:'8XFF+F5 Lapu-Lapu, Cebu',
+    coords:[10.3294,123.9670]
   },
   bridge2_lapu_return_start:{
     label:'Starbucks Shell Pusok Cebu',
     address:'Starbucks Shell Pusok Cebu, M.L. Quezon National Highway, Lapu-Lapu City, Cebu',
-    query:'Starbucks Shell Pusok Cebu, M.L. Quezon National Highway, Lapu-Lapu City, Cebu'
+    query:'Starbucks Shell Pusok Cebu, M.L. Quezon National Highway, Lapu-Lapu City, Cebu',
+    coords:[10.3297,123.9667]
   },
   marcelo_fernan_bridge:{
     label:'Marcelo Fernan Bridge',
     address:'Marcelo Fernan Bridge, U.N. Avenue, Mandaue City, Cebu',
-    query:'Marcelo Fernan Bridge, U.N. Avenue, Mandaue City, Cebu'
+    query:'Marcelo Fernan Bridge, U.N. Avenue, Mandaue City, Cebu',
+    coords:[10.3348,123.9610]
   },
   un_avenue_mandaue:{
     label:'UN Avenue, Mandaue',
     address:'UN Avenue, Mandaue City, Cebu',
-    query:'UN Avenue, Mandaue City, Cebu'
+    query:'UN Avenue, Mandaue City, Cebu',
+    coords:[10.3390,123.9586]
   },
   mybus_sm_seaside:{
     label:'MyBus SM Seaside Terminal',
     address:'7VJJ+QP Cebu City, Cebu',
-    query:'7VJJ+QP Cebu City, Cebu'
+    query:'7VJJ+QP Cebu City, Cebu',
+    coords:[10.2818,123.8792]
   },
   lactodco:{
     label:'LACTODCO, Purok five star',
     address:'LACTODCO, Purok five star, Lapu-Lapu City, Cebu',
-    query:'7WFW+M8 Lapu-Lapu, Cebu'
+    query:'7WFW+M8 Lapu-Lapu, Cebu',
+    coords:[10.2518,123.9699]
   },
   cclex_ramp:{
     label:'Cebu South Coastal Rd & F. Vestil St',
     address:'Cebu South Coastal Rd & F. Vestil St, Cebu City, Cebu',
-    query:'F. Vestil St & Cebu South Coastal Rd, Mambaling, Cebu City, 6000 Cebu'
+    query:'F. Vestil St & Cebu South Coastal Rd, Mambaling, Cebu City, 6000 Cebu',
+    coords:[10.2825,123.8798]
   },
   cclex_waypoint:{
     label:'Cebu-Cordova Link Expy',
     address:'Cebu-Cordova Link Expy, Cebu City, Cebu',
-    query:'Cebu-Cordova Link Expy, Cebu City, Cebu, Philippines'
+    query:'Cebu-Cordova Link Expy, Cebu City, Cebu, Philippines',
+    coords:[10.2511,123.9448]
   }
 };
 
@@ -368,18 +422,28 @@ const ROUTE_TEMPLATES = {
   }
 };
 
-const ALL_PANELS = ['routePanel','simPanel','histPanel'];
+const ALL_PANELS = ADMIN_MODE ? ['routePanel','simPanel','histPanel'] : ['routePanel'];
 function togglePanel(id){
   const el = document.getElementById(id);
+  if(!el) return;
   const isOpen = el.classList.contains('open');
-  ALL_PANELS.forEach(p=>document.getElementById(p).classList.remove('open'));
+  ALL_PANELS.forEach(p=>{
+    const panel = document.getElementById(p);
+    if(panel) panel.classList.remove('open');
+  });
   if(!isOpen){
     el.classList.add('open');
     if(id === 'histPanel') loadHistoricalEvents();
   }
 }
-function closePanel(id){document.getElementById(id).classList.remove('open')}
-map.on('click',()=>ALL_PANELS.forEach(p=>document.getElementById(p).classList.remove('open')));
+function closePanel(id){
+  const panel = document.getElementById(id);
+  if(panel) panel.classList.remove('open');
+}
+map.on('click',()=>ALL_PANELS.forEach(p=>{
+  const panel = document.getElementById(p);
+  if(panel) panel.classList.remove('open');
+}));
 
 const markers = {};
 let currentRiskData = {};
@@ -423,15 +487,26 @@ async function loadMapData(){
 }
 loadMapData();
 setInterval(loadMapData,30000);
-loadSimulationStatus();
+if(ADMIN_MODE){
+  loadSimulationStatus();
+}
 updateRoutePlannerCopy();
 
 let activeRoutes = [];
 let routeMarkers = [];
 let currentRecommendation = null;
 let currentSelectedRouteId = null;
-let currentGpsOrigin = null;
-let routeOriginMode = 'fixed';
+
+const ROUTE_PREVIEW_IMAGES = {
+  bridge1_mandaue_to_lapu: '/static/route-previews/bridge1_mandaue_to_lapu.png',
+  bridge1_lapu_to_mandaue: '/static/route-previews/bridge1_lapu_to_mandaue.png',
+  bridge2_mandaue_to_lapu: '/static/route-previews/bridge2_mandaue_to_lapu.png',
+  bridge2_lapu_to_mandaue: '/static/route-previews/bridge2_lapu_to_mandaue.png',
+  cclex_mandaue_to_lapu_bridge1: '/static/route-previews/cclex_mandaue_to_lapu_bridge1.png',
+  cclex_mandaue_to_lapu_bridge2: '/static/route-previews/cclex_mandaue_to_lapu_bridge2.png',
+  cclex_lapu_to_mandaue_bridge1: '/static/route-previews/cclex_lapu_to_mandaue_bridge1.png',
+  cclex_lapu_to_mandaue_bridge2: '/static/route-previews/cclex_lapu_to_mandaue_bridge2.png'
+};
 
 function rememberRoute(type, ref){
   activeRoutes.push({type, ref});
@@ -454,6 +529,7 @@ function clearRoutes(){
   clearRouteVisuals();
   currentRecommendation = null;
   currentSelectedRouteId = null;
+  closeRoutePreview();
   document.getElementById('routeResults').innerHTML = '<div class="route-empty">Routes cleared.</div>';
 }
 
@@ -470,7 +546,7 @@ function updateRoutePlannerCopy(){
       'Automatic logic:<br>' +
       'Bridge 1 return route: Pajo terminal habal habal station to Philippine Spring Water Resources through Serging Veloso Osmena Jr. Brg.<br>' +
       'Bridge 2 return route: Starbucks Shell Pusok Cebu to UN Avenue through Marcelo Fernan Bridge.<br>' +
-      'If both bridges flood: use the CCLEX return routes from LACTODCO either to Shell on A. C. Cortes, or through Cebu South Coastal Rd & F. Vestil St, MyBus, and UN Avenue to Wilcon Depot.';
+      'If both bridges flood: use the CCLEX return routes from LACTODCO back to Mandaue.';
     return;
   }
   box.innerHTML =
@@ -487,79 +563,53 @@ function stopQuery(stop){
   return '';
 }
 
-function updateGpsNote(text){
-  const el = document.getElementById('routeGpsNote');
-  if(el) el.textContent = text;
+function routeStopList(route){
+  return [route.origin, ...(route.waypoints || []), route.destination];
 }
 
-function useFixedRouteStart(){
-  routeOriginMode = 'fixed';
-  updateGpsNote('GPS mode: fixed route starting points.');
-  if(currentRecommendation){
-    renderRouteResults();
-  }
+function closeRoutePreview(evt=null){
+  if(evt && evt.target !== evt.currentTarget) return;
+  document.getElementById('routePreviewOverlay').classList.remove('open');
 }
 
-function requestCurrentLocation(force=false){
-  if(currentGpsOrigin && !force){
-    routeOriginMode = 'gps';
-    updateGpsNote('GPS mode: live current location is active for route links.');
-    return Promise.resolve(currentGpsOrigin);
-  }
-  if(!navigator.geolocation){
-    routeOriginMode = 'fixed';
-    updateGpsNote('GPS mode: browser location is not available, so fixed route starting points will be used.');
-    return Promise.resolve(null);
-  }
-  updateGpsNote('GPS mode: requesting live current location...');
-  return new Promise(resolve=>{
-    navigator.geolocation.getCurrentPosition(
-      pos=>{
-        routeOriginMode = 'gps';
-        currentGpsOrigin = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          label: 'Your current location'
-        };
-        updateGpsNote('GPS mode: live current location is active for route links.');
-        if(currentRecommendation){
-          renderRouteResults();
-        }
-        resolve(currentGpsOrigin);
-      },
-      err=>{
-        console.warn('GPS location error:', err);
-        routeOriginMode = 'fixed';
-        updateGpsNote('GPS mode: permission denied or unavailable, so fixed route starting points will be used.');
-        resolve(null);
-      },
-      {enableHighAccuracy:true, timeout:10000, maximumAge:120000}
-    );
-  });
-}
-
-function buildGoogleMapsDirectionsUrl(route, gpsOrigin=null){
-  const origin = gpsOrigin ? `${gpsOrigin.lat},${gpsOrigin.lng}` : stopQuery(route.origin);
-  const destination = stopQuery(route.destination);
-  const waypoints = (route.waypoints || []).map(stop=>stopQuery(stop)).filter(Boolean).join('|');
-  let url = 'https://www.google.com/maps/dir/?api=1&travelmode=driving';
-  url += '&origin=' + encodeURIComponent(origin);
-  url += '&destination=' + encodeURIComponent(destination);
-  if(waypoints){
-    url += '&waypoints=' + encodeURIComponent(waypoints);
-  }
-  return url;
-}
-
-async function openRouteInGoogleMaps(routeId){
+function openRoutePreview(routeId){
   if(!currentRecommendation) return;
   const route = (currentRecommendation.available || []).find(r=>r.id === routeId);
   if(!route) return;
   currentSelectedRouteId = routeId;
   renderRouteResults();
-  const gpsOrigin = routeOriginMode === 'gps' ? await requestCurrentLocation(false) : null;
-  const url = buildGoogleMapsDirectionsUrl(route, gpsOrigin);
-  window.open(url, '_blank', 'noopener,noreferrer');
+  const overlay = document.getElementById('routePreviewOverlay');
+  const title = document.getElementById('routePreviewTitle');
+  const copy = document.getElementById('routePreviewCopy');
+  const image = document.getElementById('routePreviewImage');
+  const missing = document.getElementById('routePreviewMissing');
+  const meta = document.getElementById('routePreviewMeta');
+  title.textContent = route.name;
+  copy.textContent = route.origin.label + ' to ' + route.destination.label + (route.waypoints.length ? ' through ' + route.waypoints.map(w=>w.label).join(', ') : '');
+  const stops = routeStopList(route);
+  meta.innerHTML = '<span class="rs ' + (route.flooded ? 'rs-avoid' : 'rs-safe') + '">' + (route.flooded ? 'AVOID - FLOODED' : 'SAFE TO USE') + '</span>' +
+    stops.map((stop,index)=>'<span class="rs rs-info">' + (index + 1) + '. ' + stop.label + '</span>').join('');
+  const imagePath = ROUTE_PREVIEW_IMAGES[route.id];
+  image.style.display = imagePath ? 'block' : 'none';
+  missing.style.display = imagePath ? 'none' : 'block';
+  missing.textContent = imagePath
+    ? ''
+    : 'No fixed route image is assigned to this route yet. Add a PNG file under /static/route-previews and map it to this route ID.';
+  if(imagePath){
+    image.onerror = ()=>{
+      image.style.display = 'none';
+      missing.style.display = 'block';
+      missing.textContent = 'Route image not found for this route yet. Place the matching PNG inside /static/route-previews to show the exact visual route.';
+    };
+    image.onload = ()=>{
+      missing.style.display = 'none';
+      image.style.display = 'block';
+    };
+    image.src = imagePath + '?v=' + Date.now();
+  } else {
+    image.removeAttribute('src');
+  }
+  overlay.classList.add('open');
 }
 
 function riskLvl(id){
@@ -821,15 +871,13 @@ function renderRouteResults(){
 
   available.forEach((route, index)=>{
     const isActive = route.id === currentSelectedRouteId;
-    const isRecommended = route.id === currentRecommendation.defaultRouteId;
     const isFlooded = !!route.flooded;
-    const badge = isFlooded ? 'AVOID - FLOODED' : (isRecommended ? 'RECOMMENDED' : 'AVAILABLE');
-    const badgeClass = isFlooded ? 'rs-avoid' : (isRecommended ? 'rs-safe' : 'rs-caut');
-    const cardTone = isFlooded ? 'danger' : (isRecommended ? 'info' : 'warn');
-    const originModeText = routeOriginMode === 'gps'
-      ? 'Current location to ' + route.destination.label
-      : route.origin.label + ' to ' + route.destination.label;
-    html += '<div class="route-card ' + (isActive ? 'active ' : '') + cardTone + '" id="route-card-' + route.id + '"><div class="route-rank">' + (isRecommended ? 'Top Recommendation' : 'Option ' + (index + 1)) + '</div><div class="route-name" style="color:' + route.color + '">' + route.name + '</div><div class="route-desc" id="route-desc-' + route.id + '">' + originModeText + (isFlooded ? ' • Bridge is flooded, avoid unless absolutely necessary.' : ' • Opens directly in Google Maps.') + '</div><div class="route-actions"><button class="route-open" onclick="openRouteInGoogleMaps(\'' + route.id + '\')">' + (isActive ? 'Open Again in Google Maps' : 'Open in Google Maps') + '</button><span class="rs ' + badgeClass + '">' + badge + '</span></div></div>';
+    const cardTone = isFlooded ? 'danger' : 'info';
+    const badge = isFlooded ? 'AVOID - FLOODED' : 'SAFE TO USE';
+    const badgeClass = isFlooded ? 'rs-avoid' : 'rs-safe';
+    const routeStops = routeStopList(route);
+    const previewSummary = routeStops.map(stop=>stop.label).join(' -> ');
+    html += '<div class="route-card ' + (isActive ? 'active ' : '') + cardTone + '" id="route-card-' + route.id + '"><div class="route-rank">Option ' + (index + 1) + '</div><div class="route-name" style="color:' + route.color + '">' + route.name + '</div><div class="route-desc" id="route-desc-' + route.id + '">' + previewSummary + '</div><div class="route-actions"><button class="route-open" onclick="openRoutePreview(\'' + route.id + '\')">' + (isActive ? 'View Again' : 'View Route') + '</button><span class="rs ' + badgeClass + '">' + badge + '</span></div></div>';
   });
   results.innerHTML = html;
 }
@@ -848,6 +896,7 @@ function simulationTargetLabel(target){
 async function loadSimulationStatus(){
   const status = document.getElementById('simStatus');
   const banner = document.getElementById('simBanner');
+  if(!status || !banner) return;
   try{
     const res = await fetch('/api/simulation-status');
     const data = await res.json();
@@ -870,6 +919,7 @@ async function loadSimulationStatus(){
 }
 
 async function simulate(level, forcedTarget=null){
+  if(!ADMIN_MODE) return;
   const status = document.getElementById('simStatus');
   const banner = document.getElementById('simBanner');
   const target = forcedTarget || document.getElementById('simTarget').value;
@@ -921,11 +971,13 @@ async function simulate(level, forcedTarget=null){
 }
 
 function applyCustomSimulation(){
+  if(!ADMIN_MODE) return;
   simulate('custom');
 }
 
 async function loadHistoricalEvents(){
   const list = document.getElementById('histList');
+  if(!list) return;
   list.innerHTML = '<div class="hist-empty">Loading...</div>';
   try{
     const res = await fetch('/api/historical-events');
@@ -950,6 +1002,7 @@ async function loadHistoricalEvents(){
 }
 
 async function replayEvent(id,el){
+  if(!ADMIN_MODE) return;
   document.querySelectorAll('.hist-item').forEach(i=>i.classList.remove('replaying'));
   el.classList.add('replaying');
   try{
@@ -978,12 +1031,7 @@ async function replayEvent(id,el){
   }
 }
 
-if(GOOGLE_MAPS_API_KEY){
-  updateRouteEngineNote('Preferred route engine: attempting Google Maps Directions, with OSRM fallback.');
-  ensureGoogleDirections().catch(()=>{});
-} else {
-  updateRouteEngineNote('No Google Maps key configured. Using OSRM fallback.');
-}
+updateRouteEngineNote('Route preview mode: fixed-start route images are shown inside FloodGuide. No Google Maps handoff is required.');
 </script>
 </body>
 </html>

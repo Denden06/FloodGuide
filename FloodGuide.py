@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
@@ -7,9 +7,29 @@ import joblib
 import os
 import threading
 import time
+from functools import wraps
 from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "floodguide-admin-secret")
+
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "floodguideadmin")
+
+
+def is_admin_logged_in():
+    return bool(session.get("is_admin"))
+
+
+def admin_required(view_func):
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if is_admin_logged_in():
+            return view_func(*args, **kwargs)
+        if request.path.startswith("/api/"):
+            return api_error_response("Admin login required.", 401, "unauthorized")
+        return redirect(url_for("admin_login", next=request.path))
+    return wrapped
 
 
 def api_error_response(message, status_code=500, error_type="error"):
@@ -1921,6 +1941,7 @@ def get_latest_row_before(cursor, device_id, target_ts):
 # AUTO-RETRAIN ENDPOINT
 # =========================================
 @app.route("/retrain", methods=["GET", "POST"])
+@admin_required
 def retrain():
     try:
         print("🔄 Auto-retrain triggered...")
@@ -1982,6 +2003,7 @@ def retrain():
 
 
 @app.route("/api/bootstrap-dataset", methods=["POST"])
+@admin_required
 def bootstrap_dataset():
     try:
         result = rebuild_bootstrap_dataset()
@@ -2002,6 +2024,7 @@ def bootstrap_dataset():
 
 
 @app.route("/api/training-mode-status")
+@admin_required
 def training_mode_status():
     try:
         force = request.args.get("refresh") == "1"
@@ -2046,11 +2069,51 @@ def map_data():
     return jsonify({"locations": locations, "ml_active": ml_active})
 
 # =========================================
+# ADMIN AUTH + PAGES
+# =========================================
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    error = None
+    next_url = request.values.get("next") or url_for("admin_map")
+    if request.method == "POST":
+        username = str(request.form.get("username", "")).strip()
+        password = str(request.form.get("password", ""))
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session["is_admin"] = True
+            session["admin_username"] = username
+            return redirect(next_url)
+        error = "Invalid admin username or password."
+    return render_template(
+        "admin_login.html",
+        error=error,
+        next_url=next_url,
+        admin_logged_in=is_admin_logged_in(),
+    )
+
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.clear()
+    return redirect(url_for("home"))
+
+
+@app.route("/admin")
+@admin_required
+def admin_map():
+    return render_template(
+        "map.html",
+        google_maps_api_key=GOOGLE_MAPS_API_KEY,
+        admin_mode=True,
+        admin_logged_in=True,
+    )
+
+# =========================================
 # DASHBOARD PAGE + API
 # =========================================
 @app.route("/dashboard")
+@admin_required
 def dashboard():
-    return render_template("dashboard.html")
+    return render_template("dashboard.html", admin_logged_in=True)
 
 def compute_actual_vs_predicted_payload():
     from sklearn.metrics import (
@@ -2276,6 +2339,7 @@ def compute_actual_vs_predicted_payload():
     }
 
 @app.route("/api/dashboard-data")
+@admin_required
 def dashboard_data():
     try:
         live_locations, ml_active = get_live_location_payloads()
@@ -2391,6 +2455,7 @@ simulation_mode = {
 }
 
 @app.route("/api/simulate", methods=["POST"])
+@admin_required
 def simulate():
     data = request.get_json(silent=True) or {}
     level = str(data.get("level", "low")).lower()
@@ -2503,6 +2568,7 @@ def simulate():
     })
 
 @app.route("/api/simulation-status")
+@admin_required
 def simulation_status():
     return jsonify(simulation_mode)
 
@@ -2512,6 +2578,7 @@ def simulation_status():
 # from the database for replay
 # =========================================
 @app.route("/api/historical-events")
+@admin_required
 def historical_events():
     try:
         conn   = get_db_connection()
@@ -2565,6 +2632,7 @@ def historical_events():
 # into the live system for demo/testing
 # =========================================
 @app.route("/api/replay-event", methods=["POST"])
+@admin_required
 def replay_event():
     data     = request.get_json()
     event_id = data.get("id")
@@ -2643,6 +2711,7 @@ def replay_event():
 # and compares to their stored labels
 # =========================================
 @app.route("/api/actual-vs-predicted")
+@admin_required
 def actual_vs_predicted():
     try:
         force = request.args.get("refresh") == "1"
@@ -2677,7 +2746,12 @@ def actual_vs_predicted():
 
 @app.route("/")
 def home():
-    return render_template("map.html", google_maps_api_key=GOOGLE_MAPS_API_KEY)
+    return render_template(
+        "map.html",
+        google_maps_api_key=GOOGLE_MAPS_API_KEY,
+        admin_mode=False,
+        admin_logged_in=is_admin_logged_in(),
+    )
 
 # =========================================
 # RUN APP
